@@ -1,0 +1,113 @@
+import { Database } from "bun:sqlite";
+
+export interface EventRecord {
+  nsid: string;
+  timestamp: number;
+  count: number;
+  deleted_count: number;
+}
+
+class EventTracker {
+  private db: Database;
+  private insertNsidQuery;
+  private insertEventQuery;
+  private updateCountQuery;
+  private getNsidCountQuery;
+  private getEventCountQuery;
+
+  constructor() {
+    this.db = new Database("events.sqlite");
+    // init db
+    this.db.run("PRAGMA journal_mode = WAL;");
+    // events
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS events (
+        nsid_idx INTEGER NOT NULL,
+        timestamp INTEGER NOT NULL,
+        deleted INTEGER NOT NULL,
+        PRIMARY KEY (nsid_idx, timestamp)
+      )
+    `);
+    // aggregated counts
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS nsid_counts (
+        nsid_idx INTEGER PRIMARY KEY,
+        count INTEGER NOT NULL,
+        deleted_count INTEGER NOT NULL,
+        last_updated INTEGER NOT NULL
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS nsid_types (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nsid TEXT UNIQUE NOT NULL
+      );
+    `);
+    // compile queries
+    this.insertNsidQuery = this.db.query(
+      "INSERT OR IGNORE INTO nsid_types (nsid) VALUES (?)",
+    );
+    this.insertEventQuery = this.db.query(`
+      INSERT OR IGNORE INTO events (nsid_idx, timestamp, deleted)
+      VALUES (
+        (SELECT id FROM nsid_types WHERE nsid = ?),
+        ?,
+        ?
+      )
+    `);
+    this.updateCountQuery = this.db.query(`
+      INSERT INTO nsid_counts (nsid_idx, count, deleted_count, last_updated)
+      VALUES (
+        (SELECT id FROM nsid_types WHERE nsid = $nsid),
+        1 - $deleted,
+        $deleted,
+        $timestamp
+      )
+      ON CONFLICT(nsid_idx) DO UPDATE SET
+        count = count + (1 - $deleted),
+        deleted_count = deleted_count + $deleted,
+        last_updated = $timestamp
+    `);
+    this.getNsidCountQuery = this.db.query(`
+      SELECT
+          (SELECT nsid FROM nsid_types WHERE id = nsid_idx) as nsid,
+          count,
+          deleted_count,
+          last_updated as timestamp
+      FROM nsid_counts
+      ORDER BY count DESC
+    `);
+    this.getEventCountQuery = this.db.query(
+      `SELECT COUNT(*) as count FROM events`,
+    );
+  }
+
+  addEvent = (nsid: string, timestamp: number, deleted: boolean) => {
+    const tx = this.db.transaction(() => {
+      this.insertNsidQuery.run(nsid);
+      this.insertEventQuery.run(nsid, timestamp, deleted);
+      this.updateCountQuery.run({
+        $nsid: nsid,
+        $deleted: deleted,
+        $timestamp: timestamp,
+      });
+    });
+
+    tx();
+  };
+
+  getNsidCounts = (): EventRecord[] => {
+    return this.getNsidCountQuery.all() as EventRecord[];
+  };
+
+  getEventCount = (): number => {
+    const result = this.getEventCountQuery.get() as { count: number };
+    return result.count;
+  };
+
+  close = () => {
+    this.db.close();
+  };
+}
+
+export const eventTracker = new EventTracker();
