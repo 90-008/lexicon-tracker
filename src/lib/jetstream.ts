@@ -13,7 +13,7 @@ export const writeEvents = () => {
   eventsToCommit = [];
 };
 
-export const startTracking = async () => {
+const startTracking = async () => {
   subscription = new JetstreamSubscription({
     url: "wss://jetstream2.us-east.bsky.network",
     validateEvents: false, // trust the jetstream :3
@@ -39,4 +39,25 @@ export const startTracking = async () => {
   }
 
   writeEvents();
+};
+
+export const track = async () => {
+  let retryCount = 0;
+  const baseDelay = 1000; // 1 second
+  const maxDelay = 60000; // 60 seconds
+
+  while (true) {
+    try {
+      await startTracking();
+      retryCount = 0; // Reset on success
+    } catch (e) {
+      console.log(`tracking failed: ${e}`);
+
+      const delay = Math.min(baseDelay * Math.pow(2, retryCount), maxDelay);
+      console.log(`retrying in ${delay}ms (attempt ${retryCount + 1})`);
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      retryCount++;
+    }
+  }
 };
