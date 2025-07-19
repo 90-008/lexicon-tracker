@@ -10,6 +10,7 @@
     let events: EventRecord[] = $state(data.events);
     let totalEvents = $state(data.totalEvents);
     let error: string | null = $state(null);
+    let dontShowBsky = $state(false);
 
     const loadData = async () => {
         try {
@@ -79,13 +80,17 @@
         </div>
     </div>
 
-    <div class="text-center mb-8">
+    <div class="w-fit flex flex-col items-center mx-auto mb-8">
         <button
             onclick={loadData}
-            class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors"
+            class="w-fit bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors"
         >
             refresh
         </button>
+        <div class="mt-2">
+            <input bind:checked={dontShowBsky} type="checkbox" />
+            <span> don't show app.bsky.* </span>
+        </div>
     </div>
 
     {#if error}
@@ -104,7 +109,9 @@
             <div
                 class="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
             >
-                {#each events as event, index (event.nsid)}
+                {#each events.filter((e) => {
+                    return dontShowBsky ? !e.nsid.startsWith("app.bsky.") : true;
+                }) as event, index (event.nsid)}
                     <div
                         class="mx-auto md:mx-0 w-fit bg-white border border-gray-200 rounded-lg md:p-6 hover:shadow-lg transition-shadow duration-200 hover:-translate-y-1 transform"
                     >
