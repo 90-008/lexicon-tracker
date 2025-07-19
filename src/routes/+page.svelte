@@ -49,14 +49,13 @@
     <meta name="description" content="tracks bluesky events by collection" />
 </svelte:head>
 
-<div class="max-w-[50vw] mx-auto p-2">
+<div class="max-w-[66vw] mx-auto p-2">
     <header class="text-center mb-8">
         <h1 class="text-4xl font-bold mb-2 text-gray-900">
             🦋 bluesky event tracker
         </h1>
         <p class="text-gray-600">
-            real-time tracking of bluesky events by collection from the
-            jetstream
+            tracking of bluesky events by collection from the jetstream
         </p>
     </header>
 
