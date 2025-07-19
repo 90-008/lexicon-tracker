@@ -1,6 +1,7 @@
 import { eventTracker } from "./db.js";
 import type { WorkerCommand } from "./types.js";
 import * as wt from "node:worker_threads";
+import workerSrc from "./worker.js?raw";
 
 let worker: wt.Worker | null = null;
 
@@ -9,7 +10,7 @@ const sendCommand = (command: WorkerCommand) => {
 };
 
 export const start = () => {
-  worker = new wt.Worker("$lib/worker.js");
+  worker = new wt.Worker(workerSrc, { eval: true });
   worker.on("message", eventTracker.recordEventHit);
 };
 

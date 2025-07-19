@@ -4,6 +4,7 @@ import { exit as workerExit, start } from "$lib/worker_manager.js";
 const exit = () => {
   workerExit();
   eventTracker.exit();
+  setTimeout(process.exit, 2000);
 };
 start();
 
