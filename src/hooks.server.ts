@@ -1,7 +1,11 @@
-import { track, writeEvents } from "$lib/jetstream.js";
+import { eventTracker } from "$lib/db";
+import { exit as workerExit, start } from "$lib/worker_manager.js";
 
-// Start tracking when the server starts
-track().catch(console.error);
-process.on("SIGINT", writeEvents);
-process.on("SIGTERM", writeEvents);
-process.on("SIGQUIT", writeEvents);
+const exit = () => {
+  workerExit();
+  eventTracker.exit();
+};
+start();
+
+process.on("SIGINT", exit);
+process.on("SIGTERM", exit);

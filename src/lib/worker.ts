@@ -1,19 +1,11 @@
 import { JetstreamSubscription } from "@atcute/jetstream";
-import { eventTracker } from "./db.js";
+import type { WorkerEventData, WorkerCommand } from "./types.js";
+import * as wt from "node:worker_threads";
 
+const port = wt.parentPort!;
 let subscription: JetstreamSubscription | null = null;
-let eventsToCommit: {
-  nsid: string;
-  timestamp: number;
-  deleted: boolean;
-}[] = [];
 
-export const writeEvents = () => {
-  eventTracker.writeEvents(eventsToCommit);
-  eventsToCommit = [];
-};
-
-const startTracking = async () => {
+const track = async () => {
   subscription = new JetstreamSubscription({
     url: "wss://jetstream2.us-east.bsky.network",
     validateEvents: false, // trust the jetstream :3
@@ -26,29 +18,29 @@ const startTracking = async () => {
 
     const { operation, collection } = event.commit;
 
-    eventTracker.recordEvent(collection, event.time_us, operation === "delete");
-    eventsToCommit.push({
+    const data: WorkerEventData = {
       nsid: collection,
       timestamp: event.time_us,
       deleted: operation === "delete",
-    });
+    };
 
-    if (eventsToCommit.length > 10000) {
-      writeEvents();
-    }
+    port.postMessage(data);
   }
-
-  writeEvents();
 };
 
-export const track = async () => {
+const trackLoop = async () => {
+  if (subscription !== null) {
+    return;
+  }
+
   let retryCount = 0;
   const baseDelay = 1000; // 1 second
   const maxDelay = 60000; // 60 seconds
 
+  // if the above fails we fall into here
   while (true) {
     try {
-      await startTracking();
+      await track();
       retryCount = 0; // Reset on success
     } catch (e) {
       console.log(`tracking failed: ${e}`);
@@ -61,3 +53,9 @@ export const track = async () => {
     }
   }
 };
+
+port.on("message", (command: WorkerCommand) => {
+  if (command === "exit") process.exit();
+});
+
+trackLoop().catch(console.error);

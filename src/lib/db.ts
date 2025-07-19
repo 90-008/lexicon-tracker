@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import {env} from 'process';
+import { env } from "process";
+import type { WorkerEventData } from "./types";
 
 export interface EventRecord {
   nsid: string;
@@ -17,7 +18,10 @@ class EventTracker {
   private updateCountQuery;
   private getNsidCountQuery;
 
+  // private bufferedRecords: WorkerEventData[];
+
   constructor() {
+    // this.bufferedRecords = [];
     this.db = new Database(env.DB_PATH ?? "events.sqlite");
     // init db
     this.db.run("PRAGMA journal_mode = WAL;");
@@ -82,37 +86,50 @@ class EventTracker {
     this.insertNsidQuery.run(ALL_NSID);
   }
 
-  writeEvents = (
-    events: { nsid: string; timestamp: number; deleted: boolean }[],
-  ) => {
-    this.db.transaction(() => {
-      for (const event of events) {
-        this.insertEventQuery.run(event.nsid, event.timestamp, event.deleted);
-      }
-    })();
-  };
+  // private recordBufferedEvents = () => {
+  //   try {
+  //     this.db.transaction(() => {
+  //       for (const event of this.bufferedRecords) {
+  //         this.insertEventQuery.run(event.nsid, event.timestamp, event.deleted);
+  //       }
+  //     })();
+  //     this.bufferedRecords = [];
+  //   } catch (e) {
+  //     console.error(`can't commit to db: ${e}`);
+  //   }
+  // };
 
-  recordEvent = (nsid: string, timestamp: number, deleted: boolean) => {
-    this.db.transaction(() => {
-      this.insertNsidQuery.run(nsid);
-      this.updateCountQuery.run({
-        $nsid: nsid,
-        $deleted: deleted,
-        $timestamp: timestamp,
-      });
-      this.updateCountQuery.run({
-        $nsid: ALL_NSID,
-        $deleted: deleted,
-        $timestamp: timestamp,
-      });
-    })();
+  recordEventHit = (data: WorkerEventData) => {
+    try {
+      this.db.transaction(() => {
+        const { nsid, timestamp, deleted } = data;
+        this.insertNsidQuery.run(nsid);
+        this.insertEventQuery.run(nsid, timestamp, deleted);
+        this.updateCountQuery.run({
+          $nsid: nsid,
+          $deleted: deleted,
+          $timestamp: timestamp,
+        });
+        this.updateCountQuery.run({
+          $nsid: ALL_NSID,
+          $deleted: deleted,
+          $timestamp: timestamp,
+        });
+      })();
+      // this.bufferedRecords.push(data);
+    } catch (e) {
+      console.error(`can't commit to db: ${e}`);
+    }
+    // commit buffered if at 10k
+    // if (this.bufferedRecords.length > 9999) this.recordBufferedEvents();
   };
 
   getNsidCounts = (): EventRecord[] => {
     return this.getNsidCountQuery.all() as EventRecord[];
   };
 
-  close = () => {
+  exit = () => {
+    // this.recordBufferedEvents();
     this.db.close();
   };
 }
