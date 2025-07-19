@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { EventRecord } from "$lib/db.js";
+    import type { EventRecord } from "$lib/types";
 
     interface Props {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
