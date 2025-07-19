@@ -63,12 +63,12 @@
 
     <div class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 mb-8">
         <div
-            class="bg-gradient-to-r from-blue-50 to-blue-100 p-3 md:p-6 rounded-lg border border-blue-200"
+            class="bg-gradient-to-r from-green-50 to-green-100 p-3 md:p-6 rounded-lg border border-green-200"
         >
-            <h3 class="text-base font-medium text-blue-700 mb-2">
+            <h3 class="text-base font-medium text-green-700 mb-2">
                 total events created
             </h3>
-            <p class="text-3xl font-bold text-blue-900">
+            <p class="text-3xl font-bold text-green-900">
                 {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
                 formatNumber(allNsidRecord?.count!)}
             </p>
