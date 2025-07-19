@@ -46,7 +46,7 @@
     <meta name="description" content="tracks bluesky events by collection" />
 </svelte:head>
 
-<div class="max-w-[60vw] mx-auto p-2">
+<div class="md:max-w-[60vw] mx-auto p-2">
     <header class="text-center mb-8">
         <h1 class="text-4xl font-bold mb-2 text-gray-900">
             bluesky event tracker
@@ -58,7 +58,7 @@
 
     <div class="mx-auto w-fit grid grid-cols-1 md:grid-cols-2 mb-8">
         <div
-            class="bg-gradient-to-r from-blue-50 to-blue-100 p-6 rounded-lg border border-blue-200"
+            class="bg-gradient-to-r from-blue-50 to-blue-100 p-3 md:p-6 rounded-lg border border-blue-200"
         >
             <h3 class="text-base font-medium text-blue-700 mb-2">
                 total events
@@ -68,7 +68,7 @@
             </p>
         </div>
         <div
-            class="bg-gradient-to-r from-green-50 to-green-100 p-6 rounded-lg border border-green-200"
+            class="bg-gradient-to-r from-green-50 to-green-100 p-3 md:p-6 rounded-lg border border-green-200"
         >
             <h3 class="text-base font-medium text-green-700 mb-2">
                 unique collections
@@ -101,10 +101,12 @@
             <h2 class="text-2xl font-bold mb-6 text-gray-900">
                 events by collection
             </h2>
-            <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div
+                class="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+            >
                 {#each events as event, index (event.nsid)}
                     <div
-                        class="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-lg transition-shadow duration-200 hover:-translate-y-1 transform"
+                        class="mx-auto md:mx-0 w-fit bg-white border border-gray-200 rounded-lg md:p-6 hover:shadow-lg transition-shadow duration-200 hover:-translate-y-1 transform"
                     >
                         <div class="flex justify-between items-start mb-3">
                             <div
