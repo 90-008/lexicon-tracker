@@ -7,13 +7,14 @@ export interface EventRecord {
   deleted_count: number;
 }
 
+const ALL_NSID = "*";
+
 class EventTracker {
   private db: Database;
   private insertNsidQuery;
   private insertEventQuery;
   private updateCountQuery;
   private getNsidCountQuery;
-  private getEventCountQuery;
 
   constructor() {
     this.db = new Database("events.sqlite");
@@ -77,9 +78,7 @@ class EventTracker {
       FROM nsid_counts
       ORDER BY count DESC
     `);
-    this.getEventCountQuery = this.db.query(
-      `SELECT COUNT(*) as count FROM events`,
-    );
+    this.insertNsidQuery.run(ALL_NSID);
   }
 
   addEvent = (nsid: string, timestamp: number, deleted: boolean) => {
@@ -91,6 +90,11 @@ class EventTracker {
         $deleted: deleted,
         $timestamp: timestamp,
       });
+      this.updateCountQuery.run({
+        $nsid: ALL_NSID,
+        $deleted: deleted,
+        $timestamp: timestamp,
+      });
     });
 
     tx();
@@ -98,11 +102,6 @@ class EventTracker {
 
   getNsidCounts = (): EventRecord[] => {
     return this.getNsidCountQuery.all() as EventRecord[];
-  };
-
-  getEventCount = (): number => {
-    const result = this.getEventCountQuery.get() as { count: number };
-    return result.count;
   };
 
   close = () => {

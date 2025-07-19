@@ -8,7 +8,12 @@
     let { data }: Props = $props();
 
     let events: EventRecord[] = $state(data.events);
-    let totalEvents = $state(data.totalEvents);
+    let usableEvents = $derived(events.filter((e) => e.nsid !== "*"));
+    let allNsidRecord = $derived(
+        events.find((e) => {
+            return e.nsid === "*";
+        }),
+    );
     let error: string | null = $state(null);
     let dontShowBsky = $state(false);
 
@@ -23,7 +28,6 @@
 
             const data = await response.json();
             events = data.events;
-            totalEvents = data.totalEvents;
         } catch (err) {
             error =
                 err instanceof Error
@@ -57,25 +61,37 @@
         </p>
     </header>
 
-    <div class="mx-auto w-fit grid grid-cols-1 md:grid-cols-2 mb-8">
+    <div class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 mb-8">
         <div
             class="bg-gradient-to-r from-blue-50 to-blue-100 p-3 md:p-6 rounded-lg border border-blue-200"
         >
             <h3 class="text-base font-medium text-blue-700 mb-2">
-                total events
+                total events created
             </h3>
             <p class="text-3xl font-bold text-blue-900">
-                {formatNumber(totalEvents)}
+                {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
+                formatNumber(allNsidRecord?.count!)}
             </p>
         </div>
         <div
-            class="bg-gradient-to-r from-green-50 to-green-100 p-3 md:p-6 rounded-lg border border-green-200"
+            class="bg-gradient-to-r from-red-50 to-red-100 p-3 md:p-6 rounded-lg border border-red-200"
         >
-            <h3 class="text-base font-medium text-green-700 mb-2">
+            <h3 class="text-base font-medium text-red-700 mb-2">
+                total events deleted
+            </h3>
+            <p class="text-3xl font-bold text-red-900">
+                {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
+                formatNumber(allNsidRecord?.deleted_count!)}
+            </p>
+        </div>
+        <div
+            class="bg-gradient-to-r from-orange-50 to-orange-100 p-3 md:p-6 rounded-lg border border-orange-200"
+        >
+            <h3 class="text-base font-medium text-orange-700 mb-2">
                 unique collections
             </h3>
-            <p class="text-3xl font-bold text-green-900">
-                {formatNumber(events.length)}
+            <p class="text-3xl font-bold text-orange-900">
+                {formatNumber(usableEvents.length)}
             </p>
         </div>
     </div>
@@ -101,15 +117,13 @@
         </div>
     {/if}
 
-    {#if events.length > 0}
+    {#if usableEvents.length > 0}
         <div class="mb-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-900">
                 events by collection
             </h2>
-            <div
-                class="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
-            >
-                {#each events.filter((e) => {
+            <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {#each usableEvents.filter((e) => {
                     return dontShowBsky ? !e.nsid.startsWith("app.bsky.") : true;
                 }) as event, index (event.nsid)}
                     <div
