@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import {env} from 'process';
 
 export interface EventRecord {
   nsid: string;
@@ -17,7 +18,7 @@ class EventTracker {
   private getNsidCountQuery;
 
   constructor() {
-    this.db = new Database("events.sqlite");
+    this.db = new Database(env.DB_PATH ?? "events.sqlite");
     // init db
     this.db.run("PRAGMA journal_mode = WAL;");
     // events

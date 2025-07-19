@@ -75,6 +75,7 @@
 
             mkdir -p $out/bin
             cp -R ./build/* $out
+            cp -R ./node_modules $out
 
             makeBinaryWrapper ${pkgs.bun}/bin/bun $out/bin/${packageJson.name} \
               --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bun ]} \
