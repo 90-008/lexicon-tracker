@@ -50,11 +50,8 @@
 
           src = ./.;
 
-          nativeBuildInputs = [pkgs.makeBinaryWrapper pkgs.rsync];
+          nativeBuildInputs = [pkgs.makeBinaryWrapper];
           buildInputs = [pkgs.bun];
-
-          PUBLIC_BASE_URL="http://localhost:5173";
-          GUESTBOOK_BASE_URL="http://localhost:8080";
 
           # dontConfigure = true;
           configurePhase = ''
