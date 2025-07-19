@@ -26,3 +26,5 @@ events.sqlite
 events.sqlite-journal
 events.sqlite-wal
 events.sqlite-shm
+
+result

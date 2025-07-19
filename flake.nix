@@ -24,7 +24,7 @@
 
           src = ./.;
 
-          outputHash = "";
+          outputHash = "sha256-IK8D8c/Bzckd44/QnDsUQqLqhJaPR36ilzQNIn0Uyns=";
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
 
@@ -62,7 +62,7 @@
             cp -R --no-preserve=ownership ${config.packages.nsid-tracker-modules} node_modules
             find node_modules -type d -exec chmod 755 {} \;
             substituteInPlace node_modules/.bin/vite \
-              --replace-fail "/usr/bin/env node" "${pkgs.nodejs-slim_latest}/bin/node"
+              --replace-fail "/usr/bin/env node" "${pkgs.bun}/bin/bun"
             runHook postConfigure
           '';
           buildPhase = ''
