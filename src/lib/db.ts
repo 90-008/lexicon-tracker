@@ -81,10 +81,19 @@ class EventTracker {
     this.insertNsidQuery.run(ALL_NSID);
   }
 
-  addEvent = (nsid: string, timestamp: number, deleted: boolean) => {
-    const tx = this.db.transaction(() => {
+  writeEvents = (
+    events: { nsid: string; timestamp: number; deleted: boolean }[],
+  ) => {
+    this.db.transaction(() => {
+      for (const event of events) {
+        this.insertEventQuery.run(event.nsid, event.timestamp, event.deleted);
+      }
+    })();
+  };
+
+  recordEvent = (nsid: string, timestamp: number, deleted: boolean) => {
+    this.db.transaction(() => {
       this.insertNsidQuery.run(nsid);
-      this.insertEventQuery.run(nsid, timestamp, deleted);
       this.updateCountQuery.run({
         $nsid: nsid,
         $deleted: deleted,
@@ -95,9 +104,7 @@ class EventTracker {
         $deleted: deleted,
         $timestamp: timestamp,
       });
-    });
-
-    tx();
+    })();
   };
 
   getNsidCounts = (): EventRecord[] => {

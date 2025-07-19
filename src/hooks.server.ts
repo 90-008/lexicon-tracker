@@ -1,4 +1,7 @@
-import { startTracking } from "$lib/jetstream.js";
+import { startTracking, writeEvents } from "$lib/jetstream.js";
 
 // Start tracking when the server starts
 startTracking().catch(console.error);
+process.on("SIGINT", writeEvents);
+process.on("SIGTERM", writeEvents);
+process.on("SIGQUIT", writeEvents);
