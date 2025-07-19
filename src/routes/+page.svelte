@@ -1,15 +1,18 @@
 <script lang="ts">
-    import { onMount } from "svelte";
     import type { EventRecord } from "$lib/db.js";
 
-    let events: EventRecord[] = [];
-    let totalEvents = 0;
-    let isLoading = true;
-    let error: string | null = null;
+    interface Props {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data: any;
+    }
+    let { data }: Props = $props();
+
+    let events: EventRecord[] = $state(data.events);
+    let totalEvents = $state(data.totalEvents);
+    let error: string | null = $state(null);
 
     const loadData = async () => {
         try {
-            isLoading = true;
             error = null;
 
             const response = await fetch("/api/events");
@@ -25,15 +28,9 @@
                 err instanceof Error
                     ? err.message
                     : "an unknown error occurred";
-            console.error("Error loading data:", err);
-        } finally {
-            isLoading = false;
+            console.error("error loading data:", err);
         }
     };
-
-    onMount(() => {
-        loadData();
-    });
 
     const formatNumber = (num: number): string => {
         return num.toLocaleString();
@@ -49,21 +46,23 @@
     <meta name="description" content="tracks bluesky events by collection" />
 </svelte:head>
 
-<div class="max-w-[66vw] mx-auto p-2">
+<div class="max-w-[60vw] mx-auto p-2">
     <header class="text-center mb-8">
         <h1 class="text-4xl font-bold mb-2 text-gray-900">
-            🦋 bluesky event tracker
+            bluesky event tracker
         </h1>
         <p class="text-gray-600">
             tracking of bluesky events by collection from the jetstream
         </p>
     </header>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+    <div class="mx-auto w-fit grid grid-cols-1 md:grid-cols-2 mb-8">
         <div
             class="bg-gradient-to-r from-blue-50 to-blue-100 p-6 rounded-lg border border-blue-200"
         >
-            <h3 class="text-sm font-medium text-blue-700 mb-2">total events</h3>
+            <h3 class="text-base font-medium text-blue-700 mb-2">
+                total events
+            </h3>
             <p class="text-3xl font-bold text-blue-900">
                 {formatNumber(totalEvents)}
             </p>
@@ -71,7 +70,7 @@
         <div
             class="bg-gradient-to-r from-green-50 to-green-100 p-6 rounded-lg border border-green-200"
         >
-            <h3 class="text-sm font-medium text-green-700 mb-2">
+            <h3 class="text-base font-medium text-green-700 mb-2">
                 unique collections
             </h3>
             <p class="text-3xl font-bold text-green-900">
@@ -82,11 +81,10 @@
 
     <div class="text-center mb-8">
         <button
-            on:click={loadData}
-            disabled={isLoading}
+            onclick={loadData}
             class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors"
         >
-            {isLoading ? "loading..." : "refresh"}
+            refresh
         </button>
     </div>
 
@@ -98,14 +96,7 @@
         </div>
     {/if}
 
-    {#if isLoading}
-        <div class="text-center py-12">
-            <div
-                class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"
-            ></div>
-            <p class="mt-4 text-gray-600">loading events...</p>
-        </div>
-    {:else if events.length > 0}
+    {#if events.length > 0}
         <div class="mb-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-900">
                 events by collection
