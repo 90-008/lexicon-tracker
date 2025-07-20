@@ -82,7 +82,9 @@
     const connectToStream = async () => {
         if (isStreamOpen) return;
         websocketStatus = "connecting";
-        websocket = new WebSocket(`ws://${PUBLIC_API_URL}/stream_events`);
+        websocket = new WebSocket(
+            `${dev ? "ws" : "wss"}://${PUBLIC_API_URL}/stream_events`,
+        );
         websocket.binaryType = "arraybuffer";
         websocket.onopen = () => {
             console.log("ws opened");
@@ -133,7 +135,9 @@
         try {
             error = null;
 
-            const response = await fetch(`http://${PUBLIC_API_URL}/events`);
+            const response = await fetch(
+                `${dev ? "http" : "https"}://${PUBLIC_API_URL}/events`,
+            );
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
