@@ -1,10 +1,11 @@
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
+use tokio::sync::broadcast;
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Default, Archive, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Archive, Deserialize, Serialize, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct NsidCounts {
     pub count: u128,
@@ -24,6 +25,7 @@ pub struct Db {
     inner: Keyspace,
     hits: papaya::HashMap<SmolStr, Partition>,
     counts: Partition,
+    event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
 }
 
 impl Db {
@@ -34,7 +36,12 @@ impl Db {
             hits: Default::default(),
             counts: inner.open_partition("_counts", PartitionCreateOptions::default())?,
             inner,
+            event_broadcaster: broadcast::channel(1000).0,
         })
+    }
+
+    pub fn new_listener(&self) -> broadcast::Receiver<(SmolStr, NsidCounts)> {
+        self.event_broadcaster.subscribe()
     }
 
     #[inline(always)]
@@ -60,7 +67,10 @@ impl Db {
         } else {
             counts.count += 1;
         }
-        self.insert_count(nsid, counts)?;
+        self.insert_count(nsid, counts.clone())?;
+        if self.event_broadcaster.receiver_count() > 0 {
+            let _ = self.event_broadcaster.send((SmolStr::new(nsid), counts));
+        }
         Ok(())
     }
 

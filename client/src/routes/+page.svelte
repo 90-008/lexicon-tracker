@@ -1,14 +1,59 @@
 <script lang="ts">
     import { dev } from "$app/environment";
     import type { EventRecord } from "$lib/types";
-    import { onMount } from "svelte";
+    import { onMount, onDestroy } from "svelte";
+    import { get, writable } from "svelte/store";
+    import StatsCard from "$lib/components/StatsCard.svelte";
+    import StatusBadge from "$lib/components/StatusBadge.svelte";
+    import EventCard from "$lib/components/EventCard.svelte";
+    import FilterControls from "$lib/components/FilterControls.svelte";
 
-    let events: EventRecord[] = $state([]);
+    const events = writable(new Map<string, EventRecord>());
+    let eventsList: { nsid: string; event: EventRecord }[] = $state([]);
+    events.subscribe((value) => {
+        eventsList = value
+            .entries()
+            .map(([nsid, event]) => ({
+                nsid,
+                event,
+            }))
+            .toArray();
+        eventsList.sort((a, b) => b.event.count - a.event.count);
+    });
+
+    // Backpressure system
+    let eventBuffer: { nsid: string; event: EventRecord }[] = [];
+    let updateTimer: number | null = null;
+    let bufferedEventsCount = $state(0);
+    const BATCH_SIZE = 10;
+    const UPDATE_INTERVAL = 100; // ms
+
+    const flushEventBuffer = () => {
+        if (eventBuffer.length === 0) return;
+
+        events.update((map) => {
+            for (const { nsid, event } of eventBuffer) {
+                map.set(nsid, event);
+            }
+            return map;
+        });
+
+        eventBuffer = [];
+        bufferedEventsCount = 0;
+    };
+
+    const scheduleUpdate = () => {
+        if (updateTimer !== null) return;
+
+        updateTimer = window.setTimeout(() => {
+            flushEventBuffer();
+            updateTimer = null;
+        }, UPDATE_INTERVAL);
+    };
     let all: EventRecord = $derived(
-        events.reduce(
-            (acc, event) => {
+        eventsList.reduce(
+            (acc, { nsid, event }) => {
                 return {
-                    nsid: "*",
                     last_seen:
                         acc.last_seen > event.last_seen
                             ? acc.last_seen
@@ -18,7 +63,6 @@
                 };
             },
             {
-                nsid: "*",
                 last_seen: 0,
                 count: 0,
                 deleted_count: 0,
@@ -26,21 +70,84 @@
         ),
     );
     let error: string | null = $state(null);
+    let filterRegex = $state("");
     let dontShowBsky = $state(false);
+
+    let websocket: WebSocket | null = null;
+    let isStreamOpen = $state(false);
+    let websocketStatus = $state<
+        "connecting" | "connected" | "disconnected" | "error"
+    >("disconnected");
+    const connectToStream = async () => {
+        if (isStreamOpen) return;
+        websocketStatus = "connecting";
+        websocket = new WebSocket(
+            dev ? "ws://localhost:3000/stream_events" : "/stream_events",
+        );
+        websocket.binaryType = "arraybuffer";
+        websocket.onopen = () => {
+            console.log("ws opened");
+            isStreamOpen = true;
+            websocketStatus = "connected";
+        };
+        websocket.onmessage = async (event) => {
+            const view = new DataView(event.data);
+            const decoder = new TextDecoder("utf-8");
+            const jsonStr = decoder.decode(view);
+            const jsonData = JSON.parse(jsonStr);
+
+            // Add to buffer instead of immediate update
+            eventBuffer.push({ nsid: jsonData.nsid, event: jsonData });
+            bufferedEventsCount = eventBuffer.length;
+
+            // If buffer is full, flush immediately
+            if (eventBuffer.length >= BATCH_SIZE) {
+                if (updateTimer !== null) {
+                    window.clearTimeout(updateTimer);
+                    updateTimer = null;
+                }
+                flushEventBuffer();
+            } else {
+                // Otherwise schedule a delayed update
+                scheduleUpdate();
+            }
+        };
+        websocket.onerror = (error) => {
+            console.error("ws error:", error);
+            websocketStatus = "error";
+        };
+        websocket.onclose = () => {
+            console.log("ws closed");
+            isStreamOpen = false;
+            websocketStatus = "disconnected";
+
+            // Flush any remaining events when connection closes
+            if (updateTimer !== null) {
+                window.clearTimeout(updateTimer);
+                updateTimer = null;
+            }
+            flushEventBuffer();
+        };
+    };
 
     const loadData = async () => {
         try {
             error = null;
 
-            const response = dev
-                ? await fetch("http://localhost:3000/events")
-                : await fetch("/api/events");
+            const response = await fetch(
+                dev ? "http://localhost:3000/events" : "/api/events",
+            );
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
 
             const data = await response.json();
-            events = data.events;
+            events.update((map) => {
+                for (const event of data.events) {
+                    map.set(event.nsid, event);
+                }
+                return map;
+            });
         } catch (err) {
             error =
                 err instanceof Error
@@ -52,6 +159,21 @@
 
     onMount(() => {
         loadData();
+        connectToStream();
+    });
+
+    onDestroy(() => {
+        // Clean up timer and flush any remaining events
+        if (updateTimer !== null) {
+            window.clearTimeout(updateTimer);
+            updateTimer = null;
+        }
+        flushEventBuffer();
+
+        // Close WebSocket connection
+        if (websocket) {
+            websocket.close();
+        }
     });
 
     const formatNumber = (num: number): string => {
@@ -60,6 +182,52 @@
 
     const formatTimestamp = (timestamp: number): string => {
         return new Date(timestamp / 1000).toLocaleString();
+    };
+
+    const createRegexFilter = (pattern: string): RegExp | null => {
+        if (!pattern) return null;
+
+        try {
+            // Check if pattern contains regex metacharacters
+            const hasRegexChars = /[.*+?^${}()|[\]\\]/.test(pattern);
+
+            if (hasRegexChars) {
+                // Use as regex with case-insensitive flag
+                return new RegExp(pattern, "i");
+            } else {
+                // Smart case: case-insensitive unless pattern has uppercase
+                const hasUppercase = /[A-Z]/.test(pattern);
+                const flags = hasUppercase ? "" : "i";
+                // Escape the pattern for literal matching
+                const escapedPattern = pattern.replace(
+                    /[.*+?^${}()|[\]\\]/g,
+                    "\\$&",
+                );
+                return new RegExp(escapedPattern, flags);
+            }
+        } catch (e) {
+            // Invalid regex, return null
+            return null;
+        }
+    };
+
+    const filterEvents = (events: { nsid: string; event: EventRecord }[]) => {
+        let filtered = events;
+
+        // Apply regex filter
+        if (filterRegex) {
+            const regex = createRegexFilter(filterRegex);
+            if (regex) {
+                filtered = filtered.filter((e) => regex.test(e.nsid));
+            }
+        }
+
+        // Apply app.bsky filter
+        if (dontShowBsky) {
+            filtered = filtered.filter((e) => !e.nsid.startsWith("app.bsky."));
+        }
+
+        return filtered;
     };
 </script>
 
@@ -78,57 +246,27 @@
         </p>
     </header>
 
-    <div class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 gap-5 mb-8">
-        <div
-            class="bg-gradient-to-r from-green-50 to-green-100 p-3 md:p-6 rounded-lg border border-green-200"
-        >
-            <h3 class="text-base font-medium text-green-700 mb-2">
-                total creation
-            </h3>
-            <p class="text-3xl font-bold text-green-900">
-                {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
-                formatNumber(all.count)}
-            </p>
-        </div>
-        <div
-            class="bg-gradient-to-r from-red-50 to-red-100 p-3 md:p-6 rounded-lg border border-red-200"
-        >
-            <h3 class="text-base font-medium text-red-700 mb-2">
-                total deletion
-            </h3>
-            <p class="text-3xl font-bold text-red-900">
-                {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
-                formatNumber(all.deleted_count)}
-            </p>
-        </div>
-        <div
-            class="bg-gradient-to-r from-orange-50 to-orange-100 p-3 md:p-6 rounded-lg border border-orange-200"
-        >
-            <h3 class="text-base font-medium text-orange-700 mb-2">
-                unique collections
-            </h3>
-            <p class="text-3xl font-bold text-orange-900">
-                {formatNumber(events.length)}
-            </p>
-        </div>
-    </div>
-
-    <div class="w-fit flex flex-col items-center mx-auto mb-8">
-        <button
-            onclick={loadData}
-            class="w-fit bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors"
-        >
-            refresh
-        </button>
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <button
-            onclick={() => (dontShowBsky = !dontShowBsky)}
-            class="mt-2 bg-yellow-100 hover:bg-yellow-200 px-2 py-1 rounded-full"
-        >
-            <input bind:checked={dontShowBsky} type="checkbox" />
-            <span class="ml-1"> don't show app.bsky.* </span>
-        </button>
+    <div
+        class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-5 mb-8"
+    >
+        <StatsCard
+            title="total creation"
+            value={all.count}
+            colorScheme="green"
+            {formatNumber}
+        />
+        <StatsCard
+            title="total deletion"
+            value={all.deleted_count}
+            colorScheme="red"
+            {formatNumber}
+        />
+        <StatsCard
+            title="unique collections"
+            value={eventsList.length}
+            colorScheme="orange"
+            {formatNumber}
+        />
     </div>
 
     {#if error}
@@ -139,40 +277,29 @@
         </div>
     {/if}
 
-    {#if events.length > 0}
+    {#if eventsList.length > 0}
         <div class="mb-8">
-            <h2 class="text-2xl font-bold mb-6 text-gray-900">
-                events by collection
-            </h2>
+            <div class="flex flex-wrap items-center gap-3 mb-3">
+                <h2 class="text-2xl font-bold text-gray-900">
+                    events by collection
+                </h2>
+                <StatusBadge status={websocketStatus} />
+            </div>
+            <FilterControls
+                {filterRegex}
+                {dontShowBsky}
+                onFilterChange={(value) => (filterRegex = value)}
+                onBskyToggle={() => (dontShowBsky = !dontShowBsky)}
+            />
             <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {#each events.filter((e) => {
-                    return dontShowBsky ? !e.nsid.startsWith("app.bsky.") : true;
-                }) as event, index (event.nsid)}
-                    <div
-                        class="mx-auto md:mx-0 bg-white border border-gray-200 rounded-lg md:p-6 hover:shadow-lg transition-shadow duration-200 hover:-translate-y-1 transform"
-                    >
-                        <div class="flex justify-between items-start mb-3">
-                            <div
-                                class="text-sm font-bold text-blue-600 bg-blue-100 px-3 py-1 rounded-full"
-                            >
-                                #{index + 1}
-                            </div>
-                        </div>
-                        <div
-                            class="font-mono text-sm text-gray-700 mb-2 break-all leading-relaxed"
-                        >
-                            {event.nsid}
-                        </div>
-                        <div class="text-lg font-bold text-green-600">
-                            {formatNumber(event.count)} created
-                        </div>
-                        <div class="text-lg font-bold text-red-600 mb-3">
-                            {formatNumber(event.deleted_count)} deleted
-                        </div>
-                        <div class="text-xs text-gray-500">
-                            last: {formatTimestamp(event.last_seen)}
-                        </div>
-                    </div>
+                {#each filterEvents(eventsList) as { nsid, event }, index (nsid)}
+                    <EventCard
+                        {nsid}
+                        {event}
+                        {index}
+                        {formatNumber}
+                        {formatTimestamp}
+                    />
                 {/each}
             </div>
         </div>
@@ -183,3 +310,15 @@
         </div>
     {/if}
 </div>
+
+<footer class="py-2 border-t border-gray-200 text-center">
+    <p class="text-gray-600 text-sm">
+        source code <a
+            href="https://tangled.sh/@poor.dog/nsid-tracker"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-blue-600 hover:text-blue-800 underline"
+            >@poor.dog/nsid-tracker</a
+        >
+    </p>
+</footer>

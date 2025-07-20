@@ -9,10 +9,12 @@ async-trait = "0.1"
 tracing-subscriber = "0.3"
 tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8", features = ["json", "ws"] }
+tower-http = {version = "0.6", features = ["request-id"]}
 atproto-jetstream = "0.9"
 fjall = "2"
 rkyv = {version = "0.8", features = ["unaligned"]}
 smol_str = { version = "0.3", features = ["serde"] }
 papaya = "0.2"
 serde = "1"
+serde_json = "1.0.141"

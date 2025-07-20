@@ -1,1 +1,30 @@
-@import 'tailwindcss';
+@import "tailwindcss";
+
+/* Make scrollbar overlay without affecting layout */
+html {
+    scrollbar-width: thin;
+}
+
+/* Webkit browsers (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.5);
+}
+
+/* Ensure scrollbar doesn't take up layout space */
+body {
+    overflow-y: overlay;
+    overflow-y: auto; /* Fallback for browsers that don't support overlay */
+}
