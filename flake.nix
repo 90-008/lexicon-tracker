@@ -31,7 +31,7 @@
 
           src = ./client;
 
-          outputHash = "sha256-IK8D8c/Bzckd44/QnDsUQqLqhJaPR36ilzQNIn0Uyns=";
+          outputHash = "sha256-TzTafbNTng/mMyf0yR9Rc6XS9/zzipwmK9SUWm2XxeY=";
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
 
@@ -76,15 +76,7 @@
           '';
           installPhase = ''
             runHook preInstall
-
-            mkdir -p $out/bin
             cp -R ./build/* $out
-            cp -R ./node_modules $out
-
-            makeBinaryWrapper ${pkgs.bun}/bin/bun $out/bin/${packageJson.name} \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bun ]} \
-              --add-flags "run --bun --no-install --cwd $out start"
-
             runHook postInstall
           '';
         };
