@@ -3,12 +3,15 @@
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   inputs.systems.url = "github:nix-systems/x86_64-linux";
   inputs.naked-shell.url = "github:90-008/mk-naked-shell";
+  inputs.nci.url = "github:yusdacra/nix-cargo-integration";
+  inputs.nci.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = inp:
     inp.parts.lib.mkFlake {inputs = inp;} {
       systems = import inp.systems;
       imports = [
         inp.naked-shell.flakeModule
+        inp.nci.flakeModule
       ];
       perSystem = {
         config,
@@ -16,13 +19,17 @@
         ...
       }: let
         pkgs = inp.nixpkgs.legacyPackages.${system};
-        packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+        packageJson = builtins.fromJSON (builtins.readFile ./client/package.json);
       in {
-        packages.nsid-tracker-modules = pkgs.stdenv.mkDerivation {
+        nci.projects."nsid-tracker" = {
+          export = false;
+          path = ./server;
+        };
+        packages.client-modules = pkgs.stdenv.mkDerivation {
           pname = "${packageJson.name}-modules";
           version = packageJson.version;
 
-          src = ./.;
+          src = ./client;
 
           outputHash = "sha256-IK8D8c/Bzckd44/QnDsUQqLqhJaPR36ilzQNIn0Uyns=";
           outputHashAlgo = "sha256";
@@ -44,11 +51,11 @@
           dontFixup = true;
           dontPatchShebangs = true;
         };
-        packages.nsid-tracker = pkgs.stdenv.mkDerivation {
+        packages.client = pkgs.stdenv.mkDerivation {
           pname = packageJson.name;
           version = packageJson.version;
 
-          src = ./.;
+          src = ./client;
 
           nativeBuildInputs = [pkgs.makeBinaryWrapper];
           buildInputs = [pkgs.bun];
@@ -56,7 +63,7 @@
           # dontConfigure = true;
           configurePhase = ''
             runHook preConfigure
-            cp -R --no-preserve=ownership ${config.packages.nsid-tracker-modules} node_modules
+            cp -R --no-preserve=ownership ${config.packages.client-modules} node_modules
             find node_modules -type d -exec chmod 755 {} \;
             substituteInPlace node_modules/.bin/vite \
               --replace-fail "/usr/bin/env node" "${pkgs.bun}/bin/bun"
@@ -81,7 +88,7 @@
             runHook postInstall
           '';
         };
-        packages.default = config.packages.nsid-tracker;
+        packages.server = config.nci.outputs."server".packages.release;
       };
     };
 }
