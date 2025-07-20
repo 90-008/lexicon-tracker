@@ -1,16 +1,14 @@
 <script lang="ts">
+    import { formatNumber, formatTimestamp } from "$lib/format";
     import type { EventRecord } from "$lib/types";
     import { onMount, onDestroy } from "svelte";
 
     interface Props {
-        nsid: string;
         event: EventRecord;
         index: number;
-        formatNumber: (num: number) => string;
-        formatTimestamp: (timestamp: number) => string;
     }
 
-    let { nsid, event, index, formatNumber, formatTimestamp }: Props = $props();
+    let { event, index }: Props = $props();
 
     // Border animation state
     let borderThickness = $state(0);
@@ -118,7 +116,7 @@
         </div>
     </div>
     <div class="font-mono text-sm text-gray-700 mb-2 break-all leading-relaxed">
-        {nsid}
+        {event.nsid}
     </div>
     <div class="text-lg font-bold text-green-600">
         {formatNumber(event.count)} created

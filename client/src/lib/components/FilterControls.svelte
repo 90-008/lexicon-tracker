@@ -32,7 +32,7 @@
         class="wsbadge !mt-0 !font-normal bg-yellow-100 hover:bg-yellow-200 border-yellow-300"
     >
         <input checked={dontShowBsky} type="checkbox" />
-        <span class="ml-0.5"> don't show app.bsky.* </span>
+        <span class="ml-0.5"> hide app.bsky.* </span>
     </button>
 </div>
 

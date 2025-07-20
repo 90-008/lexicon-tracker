@@ -1,31 +1,32 @@
 <script lang="ts">
     import { dev } from "$app/environment";
-    import type { EventRecord } from "$lib/types";
+    import type { EventRecord, NsidCounts } from "$lib/types";
     import { onMount, onDestroy } from "svelte";
-    import { get, writable } from "svelte/store";
+    import { writable } from "svelte/store";
+    import { PUBLIC_API_URL } from "$env/static/public";
+    import { fetchEvents } from "$lib/api";
+    import { createRegexFilter } from "$lib/filter";
     import StatsCard from "$lib/components/StatsCard.svelte";
     import StatusBadge from "$lib/components/StatusBadge.svelte";
     import EventCard from "$lib/components/EventCard.svelte";
     import FilterControls from "$lib/components/FilterControls.svelte";
-    import { PUBLIC_API_URL } from "$env/static/public";
 
-    const events = writable(new Map<string, EventRecord>());
-    let eventsList: { nsid: string; event: EventRecord }[] = $state([]);
+    const events = writable(new Map<string, NsidCounts>());
+    let eventsList: EventRecord[] = $state([]);
     events.subscribe((value) => {
         eventsList = value
             .entries()
             .map(([nsid, event]) => ({
                 nsid,
-                event,
+                ...event,
             }))
             .toArray();
-        eventsList.sort((a, b) => b.event.count - a.event.count);
+        eventsList.sort((a, b) => b.count - a.count);
     });
 
     // Backpressure system
-    let eventBuffer: { nsid: string; event: EventRecord }[] = [];
+    let eventBuffer: EventRecord[] = [];
     let updateTimer: number | null = null;
-    let bufferedEventsCount = $state(0);
     const BATCH_SIZE = 10;
     const UPDATE_INTERVAL = 100; // ms
 
@@ -33,14 +34,13 @@
         if (eventBuffer.length === 0) return;
 
         events.update((map) => {
-            for (const { nsid, event } of eventBuffer) {
-                map.set(nsid, event);
+            for (const event of eventBuffer) {
+                map.set(event.nsid, event);
             }
             return map;
         });
 
         eventBuffer = [];
-        bufferedEventsCount = 0;
     };
 
     const scheduleUpdate = () => {
@@ -51,9 +51,9 @@
             updateTimer = null;
         }, UPDATE_INTERVAL);
     };
-    let all: EventRecord = $derived(
+    let all: NsidCounts = $derived(
         eventsList.reduce(
-            (acc, { nsid, event }) => {
+            (acc, event) => {
                 return {
                     last_seen:
                         acc.last_seen > event.last_seen
@@ -98,8 +98,7 @@
             const jsonData = JSON.parse(jsonStr);
 
             // Add to buffer instead of immediate update
-            eventBuffer.push({ nsid: jsonData.nsid, event: jsonData });
-            bufferedEventsCount = eventBuffer.length;
+            eventBuffer.push(jsonData);
 
             // If buffer is full, flush immediately
             if (eventBuffer.length >= BATCH_SIZE) {
@@ -134,17 +133,9 @@
     const loadData = async () => {
         try {
             error = null;
-
-            const response = await fetch(
-                `${dev ? "http" : "https"}://${PUBLIC_API_URL}/events`,
-            );
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
+            const data = await fetchEvents();
             events.update((map) => {
-                for (const event of data.events) {
+                for (const event of data) {
                     map.set(event.nsid, event);
                 }
                 return map;
@@ -177,42 +168,7 @@
         }
     });
 
-    const formatNumber = (num: number): string => {
-        return num.toLocaleString();
-    };
-
-    const formatTimestamp = (timestamp: number): string => {
-        return new Date(timestamp / 1000).toLocaleString();
-    };
-
-    const createRegexFilter = (pattern: string): RegExp | null => {
-        if (!pattern) return null;
-
-        try {
-            // Check if pattern contains regex metacharacters
-            const hasRegexChars = /[.*+?^${}()|[\]\\]/.test(pattern);
-
-            if (hasRegexChars) {
-                // Use as regex with case-insensitive flag
-                return new RegExp(pattern, "i");
-            } else {
-                // Smart case: case-insensitive unless pattern has uppercase
-                const hasUppercase = /[A-Z]/.test(pattern);
-                const flags = hasUppercase ? "" : "i";
-                // Escape the pattern for literal matching
-                const escapedPattern = pattern.replace(
-                    /[.*+?^${}()|[\]\\]/g,
-                    "\\$&",
-                );
-                return new RegExp(escapedPattern, flags);
-            }
-        } catch (e) {
-            // Invalid regex, return null
-            return null;
-        }
-    };
-
-    const filterEvents = (events: { nsid: string; event: EventRecord }[]) => {
+    const filterEvents = (events: EventRecord[]) => {
         let filtered = events;
 
         // Apply regex filter
@@ -233,8 +189,11 @@
 </script>
 
 <svelte:head>
-    <title>bluesky event tracker</title>
-    <meta name="description" content="tracks bluesky events by collection" />
+    <title>bluesky jetstream tracker</title>
+    <meta
+        name="description"
+        content="tracks bluesky jetstream events by collection"
+    />
 </svelte:head>
 
 <div class="md:max-w-[60vw] mx-auto p-2">
@@ -254,19 +213,16 @@
             title="total creation"
             value={all.count}
             colorScheme="green"
-            {formatNumber}
         />
         <StatsCard
             title="total deletion"
             value={all.deleted_count}
             colorScheme="red"
-            {formatNumber}
         />
         <StatsCard
             title="unique collections"
             value={eventsList.length}
             colorScheme="orange"
-            {formatNumber}
         />
     </div>
 
@@ -293,14 +249,8 @@
                 onBskyToggle={() => (dontShowBsky = !dontShowBsky)}
             />
             <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {#each filterEvents(eventsList) as { nsid, event }, index (nsid)}
-                    <EventCard
-                        {nsid}
-                        {event}
-                        {index}
-                        {formatNumber}
-                        {formatTimestamp}
-                    />
+                {#each filterEvents(eventsList) as event, index (event.nsid)}
+                    <EventCard {event} {index} />
                 {/each}
             </div>
         </div>
