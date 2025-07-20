@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -17,7 +17,13 @@ pub async fn serve(db: Arc<Db>) {
         .route("/stream_events", get(stream_events))
         .with_state(db);
 
-    let addr = "0.0.0.0:3000";
+    let addr = SocketAddr::from((
+        [0, 0, 0, 0],
+        std::env::var("PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(3713),
+    ));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     tracing::info!("starting serve on {addr}");
     axum::serve(listener, app).await.unwrap();
