@@ -18,6 +18,8 @@ pub struct NsidHit {
     pub deleted: bool,
 }
 
+// counts is nsid -> NsidCounts
+// hits is tree per nsid: timestamp -> NsidHit
 pub struct Db {
     inner: Keyspace,
     hits: papaya::HashMap<SmolStr, Partition>,

@@ -1,6 +1,6 @@
 export type EventRecord = {
   nsid: string;
-  timestamp: number;
+  last_seen: number;
   count: number;
   deleted_count: number;
 };

@@ -9,7 +9,7 @@ use crate::{db::Db, error::AppResult};
 pub async fn serve(db: Arc<Db>) {
     let app = Router::new().route("/events", get(events)).with_state(db);
 
-    let addr = "0.0.0.0:3123";
+    let addr = "0.0.0.0:3000";
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     tracing::info!("starting serve on {addr}");
     axum::serve(listener, app).await.unwrap();
@@ -37,5 +37,6 @@ async fn events(db: State<Arc<Db>>) -> AppResult<Json<Events>> {
             last_seen: counts.last_seen,
         })
     }
+    events.sort_unstable_by(|a, b| b.count.cmp(&a.count));
     Ok(Json(Events { events }))
 }

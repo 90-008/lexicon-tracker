@@ -1,18 +1,29 @@
 <script lang="ts">
+    import { dev } from "$app/environment";
     import type { EventRecord } from "$lib/types";
+    import { onMount } from "svelte";
 
-    interface Props {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        data: any;
-    }
-    let { data }: Props = $props();
-
-    let events: EventRecord[] = $state(data.events);
-    let usableEvents = $derived(events.filter((e) => e.nsid !== "*"));
-    let allNsidRecord = $derived(
-        events.find((e) => {
-            return e.nsid === "*";
-        }),
+    let events: EventRecord[] = $state([]);
+    let all: EventRecord = $derived(
+        events.reduce(
+            (acc, event) => {
+                return {
+                    nsid: "*",
+                    last_seen:
+                        acc.last_seen > event.last_seen
+                            ? acc.last_seen
+                            : event.last_seen,
+                    count: acc.count + event.count,
+                    deleted_count: acc.deleted_count + event.deleted_count,
+                };
+            },
+            {
+                nsid: "*",
+                last_seen: 0,
+                count: 0,
+                deleted_count: 0,
+            },
+        ),
     );
     let error: string | null = $state(null);
     let dontShowBsky = $state(false);
@@ -21,7 +32,9 @@
         try {
             error = null;
 
-            const response = await fetch("/api/events");
+            const response = dev
+                ? await fetch("http://localhost:3000/events")
+                : await fetch("/api/events");
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
@@ -36,6 +49,10 @@
             console.error("error loading data:", err);
         }
     };
+
+    onMount(() => {
+        loadData();
+    });
 
     const formatNumber = (num: number): string => {
         return num.toLocaleString();
@@ -61,27 +78,27 @@
         </p>
     </header>
 
-    <div class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 mb-8">
+    <div class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 gap-5 mb-8">
         <div
             class="bg-gradient-to-r from-green-50 to-green-100 p-3 md:p-6 rounded-lg border border-green-200"
         >
             <h3 class="text-base font-medium text-green-700 mb-2">
-                total events created
+                total creation
             </h3>
             <p class="text-3xl font-bold text-green-900">
                 {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
-                formatNumber(allNsidRecord?.count!)}
+                formatNumber(all.count)}
             </p>
         </div>
         <div
             class="bg-gradient-to-r from-red-50 to-red-100 p-3 md:p-6 rounded-lg border border-red-200"
         >
             <h3 class="text-base font-medium text-red-700 mb-2">
-                total events deleted
+                total deletion
             </h3>
             <p class="text-3xl font-bold text-red-900">
                 {// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
-                formatNumber(allNsidRecord?.deleted_count!)}
+                formatNumber(all.deleted_count)}
             </p>
         </div>
         <div
@@ -91,7 +108,7 @@
                 unique collections
             </h3>
             <p class="text-3xl font-bold text-orange-900">
-                {formatNumber(usableEvents.length)}
+                {formatNumber(events.length)}
             </p>
         </div>
     </div>
@@ -103,10 +120,15 @@
         >
             refresh
         </button>
-        <div class="mt-2">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <button
+            onclick={() => (dontShowBsky = !dontShowBsky)}
+            class="mt-2 bg-yellow-100 hover:bg-yellow-200 px-2 py-1 rounded-full"
+        >
             <input bind:checked={dontShowBsky} type="checkbox" />
-            <span> don't show app.bsky.* </span>
-        </div>
+            <span class="ml-1"> don't show app.bsky.* </span>
+        </button>
     </div>
 
     {#if error}
@@ -117,17 +139,17 @@
         </div>
     {/if}
 
-    {#if usableEvents.length > 0}
+    {#if events.length > 0}
         <div class="mb-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-900">
                 events by collection
             </h2>
             <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {#each usableEvents.filter((e) => {
+                {#each events.filter((e) => {
                     return dontShowBsky ? !e.nsid.startsWith("app.bsky.") : true;
                 }) as event, index (event.nsid)}
                     <div
-                        class="mx-auto md:mx-0 w-fit bg-white border border-gray-200 rounded-lg md:p-6 hover:shadow-lg transition-shadow duration-200 hover:-translate-y-1 transform"
+                        class="mx-auto md:mx-0 bg-white border border-gray-200 rounded-lg md:p-6 hover:shadow-lg transition-shadow duration-200 hover:-translate-y-1 transform"
                     >
                         <div class="flex justify-between items-start mb-3">
                             <div
@@ -148,7 +170,7 @@
                             {formatNumber(event.deleted_count)} deleted
                         </div>
                         <div class="text-xs text-gray-500">
-                            last: {formatTimestamp(event.timestamp)}
+                            last: {formatTimestamp(event.last_seen)}
                         </div>
                     </div>
                 {/each}
