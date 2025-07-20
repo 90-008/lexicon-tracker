@@ -76,6 +76,7 @@
           '';
           installPhase = ''
             runHook preInstall
+            mkdir -p $out
             cp -R ./build/* $out
             runHook postInstall
           '';
