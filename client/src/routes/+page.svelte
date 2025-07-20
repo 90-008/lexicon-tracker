@@ -7,6 +7,7 @@
     import StatusBadge from "$lib/components/StatusBadge.svelte";
     import EventCard from "$lib/components/EventCard.svelte";
     import FilterControls from "$lib/components/FilterControls.svelte";
+    import { PUBLIC_API_URL } from "$env/static/public";
 
     const events = writable(new Map<string, EventRecord>());
     let eventsList: { nsid: string; event: EventRecord }[] = $state([]);
@@ -81,9 +82,7 @@
     const connectToStream = async () => {
         if (isStreamOpen) return;
         websocketStatus = "connecting";
-        websocket = new WebSocket(
-            dev ? "ws://localhost:3000/stream_events" : "/stream_events",
-        );
+        websocket = new WebSocket(`ws://${PUBLIC_API_URL}/stream_events`);
         websocket.binaryType = "arraybuffer";
         websocket.onopen = () => {
             console.log("ws opened");
@@ -134,9 +133,7 @@
         try {
             error = null;
 
-            const response = await fetch(
-                dev ? "http://localhost:3000/events" : "/api/events",
-            );
+            const response = await fetch(`http://${PUBLIC_API_URL}/events`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
