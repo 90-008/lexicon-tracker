@@ -1,38 +1,30 @@
-# sv
+a webapp and server that monitors bluesky's jetsream and counts how many times different types of records are created or deleted. it shows you which collections (like posts, likes, follows, etc.) are most active on the network.
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+for backend it uses rust with fjall as db, the frontend is built with sveltekit.
 
-## Creating a project
+see [here](https://gaze.systems/nsid-tracker) for a hosted instance of it.
 
-If you're seeing this, you've probably already done this step. Congrats!
+## running
 
-```bash
-# create a new project in the current directory
-npx sv create
+### with nix
 
-# create a new project in my-app
-npx sv create my-app
-```
+- run the server: `nix run git+https://tangled.sh/poor.dog/nsid-tracker#server`
+- build the client: `nix build git+https://tangled.sh/poor.dog/nsid-tracker#client`
 
-## Developing
+### manually
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+you'll need rust and bun.
 
-```bash
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
+then:
 
 ```bash
-npm run build
+# start the backend
+cd server
+cargo run
+
+# in another terminal, start the frontend
+cd client
+bun install && bun run -b dev
 ```
 
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+the frontend will be available at `http://localhost:5173` and the backend at `http://localhost:3713`.
