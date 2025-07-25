@@ -2,7 +2,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     Json, Router,
-    extract::{State, WebSocketUpgrade, ws::Message},
+    extract::{Request, State, WebSocketUpgrade, ws::Message},
+    middleware::Next,
     response::Response,
     routing::get,
 };
@@ -15,6 +16,7 @@ pub async fn serve(db: Arc<Db>) {
     let app = Router::new()
         .route("/events", get(events))
         .route("/stream_events", get(stream_events))
+        .route_layer(axum::middleware::from_fn(log))
         .with_state(db);
 
     let addr = SocketAddr::from((
@@ -27,6 +29,18 @@ pub async fn serve(db: Arc<Db>) {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     tracing::info!("starting serve on {addr}");
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn log(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let resp = next.run(req).await;
+    if resp.status().is_server_error() {
+        tracing::error!("{method} {uri} ({})", resp.status());
+    } else {
+        tracing::info!("{method} {uri} ({})", resp.status());
+    }
+    resp
 }
 
 #[derive(Serialize)]
