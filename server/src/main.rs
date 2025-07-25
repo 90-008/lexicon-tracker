@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use atproto_jetstream::{CancellationToken, Consumer, EventHandler, JetstreamEvent};
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
@@ -11,6 +13,10 @@ use crate::{
 mod api;
 mod db;
 mod error;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 const BSKY_ZSTD_DICT: &[u8] = include_bytes!("./bsky_zstd_dictionary");
 
