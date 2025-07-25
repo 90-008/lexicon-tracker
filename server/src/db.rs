@@ -1,3 +1,4 @@
+use atproto_jetstream::JetstreamEvent;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
@@ -17,6 +18,34 @@ pub struct NsidCounts {
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct NsidHit {
     pub deleted: bool,
+}
+
+pub struct EventRecord {
+    nsid: SmolStr,
+    timestamp: u64,
+    deleted: bool,
+}
+
+impl EventRecord {
+    pub fn from_jetstream(event: JetstreamEvent) -> Option<Self> {
+        match event {
+            JetstreamEvent::Commit {
+                time_us, commit, ..
+            } => Some(Self {
+                nsid: commit.collection.into(),
+                timestamp: time_us,
+                deleted: false,
+            }),
+            JetstreamEvent::Delete {
+                time_us, commit, ..
+            } => Some(Self {
+                nsid: commit.collection.into(),
+                timestamp: time_us,
+                deleted: true,
+            }),
+            _ => None,
+        }
+    }
 }
 
 // counts is nsid -> NsidCounts
@@ -57,19 +86,25 @@ impl Db {
         }))
     }
 
-    pub fn record_event(&self, nsid: &str, timestamp: u64, deleted: bool) -> AppResult<()> {
-        self.insert_event(nsid, timestamp, deleted)?;
+    pub fn record_event(&self, e: EventRecord) -> AppResult<()> {
+        let EventRecord {
+            nsid,
+            timestamp,
+            deleted,
+        } = e;
+
+        self.insert_event(&nsid, timestamp, deleted)?;
         // increment count
-        let mut counts = self.get_count(nsid)?;
+        let mut counts = self.get_count(&nsid)?;
         counts.last_seen = timestamp;
         if deleted {
             counts.deleted_count += 1;
         } else {
             counts.count += 1;
         }
-        self.insert_count(nsid, counts.clone())?;
+        self.insert_count(&nsid, counts.clone())?;
         if self.event_broadcaster.receiver_count() > 0 {
-            let _ = self.event_broadcaster.send((SmolStr::new(nsid), counts));
+            let _ = self.event_broadcaster.send((SmolStr::new(&nsid), counts));
         }
         Ok(())
     }

@@ -28,3 +28,4 @@ events.sqlite-wal
 events.sqlite-shm
 
 result
+server/bsky_zstd_dictionary

@@ -1,35 +1,36 @@
 use std::sync::Arc;
 
 use atproto_jetstream::{CancellationToken, Consumer, EventHandler, JetstreamEvent};
+use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::{api::serve, db::Db};
+use crate::{
+    api::serve,
+    db::{Db, EventRecord},
+};
 
 mod api;
 mod db;
 mod error;
 
+const BSKY_ZSTD_DICT: &[u8] = include_bytes!("./bsky_zstd_dictionary");
+
 struct JetstreamHandler {
-    db: Arc<Db>,
+    tx: Sender<EventRecord>,
+}
+
+impl JetstreamHandler {
+    fn new() -> (Self, Receiver<EventRecord>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+        (Self { tx }, rx)
+    }
 }
 
 #[async_trait::async_trait]
 impl EventHandler for JetstreamHandler {
     async fn handle_event(&self, event: JetstreamEvent) -> anyhow::Result<()> {
-        let db = self.db.clone();
-        tokio::task::spawn_blocking(move || {
-            let result = match event {
-                JetstreamEvent::Commit {
-                    time_us, commit, ..
-                } => db.record_event(&commit.collection, time_us, false),
-                JetstreamEvent::Delete {
-                    time_us, commit, ..
-                } => db.record_event(&commit.collection, time_us, true),
-                _ => Ok(()),
-            };
-            if let Err(err) = result {
-                tracing::error!("couldn't record event: {err}");
-            }
-        });
+        if let Some(e) = EventRecord::from_jetstream(event) {
+            self.tx.send(e).await?;
+        }
         Ok(())
     }
 
@@ -40,32 +41,48 @@ impl EventHandler for JetstreamHandler {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::fmt().compact().init();
 
     let db = Arc::new(Db::new().expect("couldnt create db"));
 
-    let consumer = Consumer::new(atproto_jetstream::ConsumerTaskConfig {
-        compression: false,
+    tokio::fs::write("./bsky_zstd_dictionary", BSKY_ZSTD_DICT)
+        .await
+        .expect("could not write bsky zstd dict");
+
+    let jetstream = Consumer::new(atproto_jetstream::ConsumerTaskConfig {
+        compression: true,
         jetstream_hostname: "jetstream2.us-west.bsky.network".into(),
         collections: Vec::new(),
         dids: Vec::new(),
         max_message_size_bytes: None,
         cursor: None,
         require_hello: true,
-        zstd_dictionary_location: String::new(),
+        zstd_dictionary_location: "./bsky_zstd_dictionary".into(),
         user_agent: "nsid-tracker/0.0.1".into(),
     });
 
-    tracing::info!("running jetstream consumer...");
+    let (event_handler, mut event_rx) = JetstreamHandler::new();
+
     let cancel_token = CancellationToken::new();
-    tokio::spawn({
+    tokio::spawn(async move {
+        jetstream
+            .register_handler(Arc::new(event_handler))
+            .await
+            .expect("cant register handler");
+        jetstream
+            .run_background(cancel_token.clone())
+            .await
+            .expect("cant run jetstream");
+    });
+
+    std::thread::spawn({
         let db = db.clone();
-        async move {
-            consumer
-                .register_handler(Arc::new(JetstreamHandler { db }))
-                .await
-                .unwrap();
-            consumer.run_background(cancel_token.clone()).await.unwrap();
+        move || {
+            while let Some(e) = event_rx.blocking_recv() {
+                if let Err(e) = db.record_event(e) {
+                    tracing::error!("failed to record event: {}", e);
+                }
+            }
         }
     });
 
