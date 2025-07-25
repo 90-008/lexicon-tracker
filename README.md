@@ -8,8 +8,8 @@ see [here](https://gaze.systems/nsid-tracker) for a hosted instance of it.
 
 ### with nix
 
-- run the server: `nix run git+https://tangled.sh/poor.dog/nsid-tracker#server`
-- build the client: `nix build git+https://tangled.sh/poor.dog/nsid-tracker#client`
+- run the server: `nix run git+https://tangled.sh/@poor.dog/nsid-tracker#server`
+- build the client: `nix build git+https://tangled.sh/@poor.dog/nsid-tracker#client`
 
 ### manually
 
@@ -19,12 +19,10 @@ then:
 
 ```bash
 # start the backend
-cd server
-cargo run
+cd server && cargo run
 
 # in another terminal, start the frontend
-cd client
-bun install && bun run -b dev
+cd client && bun install && bun run -b dev
 ```
 
 the frontend will be available at `http://localhost:5173` and the backend at `http://localhost:3713`.
