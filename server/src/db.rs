@@ -65,7 +65,10 @@ impl Db {
             .open()?;
         Ok(Self {
             hits: Default::default(),
-            counts: ks.open_partition("_counts", PartitionCreateOptions::default())?,
+            counts: ks.open_partition(
+                "_counts",
+                PartitionCreateOptions::default().compression(fjall::CompressionType::None),
+            )?,
             inner: ks,
             event_broadcaster: broadcast::channel(1000).0,
         })
@@ -82,12 +85,12 @@ impl Db {
         f: impl FnOnce(&Partition) -> AppResult<()>,
     ) -> AppResult<()> {
         f(self.hits.pin().get_or_insert_with(SmolStr::new(nsid), || {
-            let opts = PartitionCreateOptions::default().compaction_strategy(
-                fjall::compaction::Strategy::Fifo(fjall::compaction::Fifo {
+            let opts = PartitionCreateOptions::default()
+                .compression(fjall::CompressionType::Miniz(9))
+                .compaction_strategy(fjall::compaction::Strategy::Fifo(fjall::compaction::Fifo {
                     limit: 5 * 1024 * 1024 * 1024,        // 5 gb
                     ttl_seconds: Some(60 * 60 * 24 * 30), // 30 days
-                }),
-            );
+                }));
             self.inner.open_partition(nsid, opts).unwrap()
         }))
     }

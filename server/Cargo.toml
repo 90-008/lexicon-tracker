@@ -12,7 +12,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["json", "ws"] }
 tower-http = {version = "0.6", features = ["request-id"]}
 atproto-jetstream = "0.9"
-fjall = "2"
+fjall = { version = "2", default-features = false, features = ["miniz"] }
 rkyv = {version = "0.8", features = ["unaligned"]}
 smol_str = { version = "0.3", features = ["serde"] }
 papaya = "0.2"
