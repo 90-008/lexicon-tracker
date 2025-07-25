@@ -84,6 +84,7 @@ async fn main() {
     std::thread::spawn({
         let db = db.clone();
         move || {
+            tracing::info!("starting ingest events thread...");
             while let Some(e) = event_rx.blocking_recv() {
                 if let Err(e) = db.record_event(e) {
                     tracing::error!("failed to record event: {}", e);

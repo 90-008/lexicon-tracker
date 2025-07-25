@@ -60,11 +60,13 @@ pub struct Db {
 impl Db {
     pub fn new() -> AppResult<Self> {
         tracing::info!("opening db...");
-        let inner = Keyspace::open(Config::default())?;
+        let ks = Config::default()
+            .cache_size(8 * 1024 * 1024) // from talna
+            .open()?;
         Ok(Self {
             hits: Default::default(),
-            counts: inner.open_partition("_counts", PartitionCreateOptions::default())?,
-            inner,
+            counts: ks.open_partition("_counts", PartitionCreateOptions::default())?,
+            inner: ks,
             event_broadcaster: broadcast::channel(1000).0,
         })
     }
@@ -80,9 +82,13 @@ impl Db {
         f: impl FnOnce(&Partition) -> AppResult<()>,
     ) -> AppResult<()> {
         f(self.hits.pin().get_or_insert_with(SmolStr::new(nsid), || {
-            self.inner
-                .open_partition(nsid, PartitionCreateOptions::default())
-                .unwrap()
+            let opts = PartitionCreateOptions::default().compaction_strategy(
+                fjall::compaction::Strategy::Fifo(fjall::compaction::Fifo {
+                    limit: 5 * 1024 * 1024 * 1024,        // 5 gb
+                    ttl_seconds: Some(60 * 60 * 24 * 30), // 30 days
+                }),
+            );
+            self.inner.open_partition(nsid, opts).unwrap()
         }))
     }
 
