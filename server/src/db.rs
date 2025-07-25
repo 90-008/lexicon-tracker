@@ -1,3 +1,5 @@
+use std::{ops::Deref, path::Path};
+
 use atproto_jetstream::JetstreamEvent;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
@@ -21,9 +23,9 @@ pub struct NsidHit {
 }
 
 pub struct EventRecord {
-    nsid: SmolStr,
-    timestamp: u64,
-    deleted: bool,
+    pub nsid: SmolStr,
+    pub timestamp: u64,
+    pub deleted: bool,
 }
 
 impl EventRecord {
@@ -58,9 +60,9 @@ pub struct Db {
 }
 
 impl Db {
-    pub fn new() -> AppResult<Self> {
+    pub fn new(path: impl AsRef<Path>) -> AppResult<Self> {
         tracing::info!("opening db...");
-        let ks = Config::default()
+        let ks = Config::new(path)
             .cache_size(8 * 1024 * 1024) // from talna
             .open()?;
         Ok(Self {
@@ -79,11 +81,11 @@ impl Db {
     }
 
     #[inline(always)]
-    fn run_in_nsid_tree(
+    fn run_in_nsid_tree<T>(
         &self,
         nsid: &str,
-        f: impl FnOnce(&Partition) -> AppResult<()>,
-    ) -> AppResult<()> {
+        f: impl FnOnce(&Partition) -> AppResult<T>,
+    ) -> AppResult<T> {
         f(self.hits.pin().get_or_insert_with(SmolStr::new(nsid), || {
             let opts = PartitionCreateOptions::default()
                 .compression(fjall::CompressionType::Miniz(9))
@@ -155,6 +157,29 @@ impl Db {
                     unsafe { rkyv::from_bytes_unchecked::<_, Error>(&val).unwrap_unchecked() },
                 )
             })
+        })
+    }
+
+    pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str>> {
+        self.inner
+            .list_partitions()
+            .into_iter()
+            .filter(|k| k.deref() != "_counts")
+    }
+
+    pub fn get_hits(
+        &self,
+        nsid: &str,
+    ) -> AppResult<impl Iterator<Item = AppResult<(u64, NsidHit)>>> {
+        self.run_in_nsid_tree(nsid, |tree| {
+            Ok(tree.iter().map(|res| {
+                res.map_err(AppError::from).map(|(key, val)| {
+                    (
+                        u64::from_be_bytes(key.as_ref().try_into().unwrap()),
+                        unsafe { rkyv::from_bytes_unchecked::<_, Error>(&val).unwrap_unchecked() },
+                    )
+                })
+            }))
         })
     }
 }

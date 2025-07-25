@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use atproto_jetstream::{CancellationToken, Consumer, EventHandler, JetstreamEvent};
+use smol_str::ToSmolStr;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -49,7 +50,15 @@ impl EventHandler for JetstreamHandler {
 async fn main() {
     tracing_subscriber::fmt::fmt().compact().init();
 
-    let db = Arc::new(Db::new().expect("couldnt create db"));
+    if std::env::args()
+        .nth(1)
+        .map_or(false, |arg| arg == "migrate")
+    {
+        migrate_to_miniz();
+        return;
+    }
+
+    let db = Arc::new(Db::new(".fjall_data").expect("couldnt create db"));
 
     tokio::fs::write("./bsky_zstd_dictionary", BSKY_ZSTD_DICT)
         .await
@@ -94,4 +103,26 @@ async fn main() {
     });
 
     serve(db).await;
+}
+
+fn migrate_to_miniz() {
+    let from = Db::new(".fjall_data").expect("couldnt create db");
+    let to = Db::new(".fjall_data_miniz").expect("couldnt create db");
+
+    let mut total_count = 0_u64;
+    for nsid in from.get_nsids() {
+        tracing::info!("migrating {} ...", nsid.deref());
+        for hit in from.get_hits(&nsid).expect("cant read hits") {
+            let (timestamp, data) = hit.expect("cant read event");
+            to.record_event(EventRecord {
+                nsid: nsid.to_smolstr(),
+                timestamp,
+                deleted: data.deleted,
+            })
+            .expect("cant record event");
+            total_count += 1;
+        }
+    }
+
+    tracing::info!("migrated {total_count} events!");
 }
