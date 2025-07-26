@@ -1,4 +1,6 @@
-use std::{collections::HashMap, net::SocketAddr, ops::Deref, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, fmt::Display, net::SocketAddr, ops::Deref, sync::Arc, time::Duration,
+};
 
 use anyhow::anyhow;
 use axum::{Json, Router, extract::State, http::Request, response::Response, routing::get};
@@ -17,6 +19,20 @@ use crate::{
     db::Db,
     error::{AppError, AppResult},
 };
+
+struct LatencyMillis(u128);
+
+impl From<Duration> for LatencyMillis {
+    fn from(duration: Duration) -> Self {
+        LatencyMillis(duration.as_millis())
+    }
+}
+
+impl Display for LatencyMillis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}ms", self.0)
+    }
+}
 
 pub async fn serve(db: Arc<Db>, cancel_token: CancellationToken) -> AppResult<()> {
     let app = Router::new()
@@ -41,13 +57,13 @@ pub async fn serve(db: Arc<Db>, cancel_token: CancellationToken) -> AppResult<()
                     }
                     span
                 })
-                .on_request(|request: &Request<_>, span: &Span| {
+                .on_request(|_request: &Request<_>, span: &Span| {
                     let _ = span.enter();
                     tracing::info!("processing")
                 })
                 .on_response(|response: &Response<_>, latency: Duration, span: &Span| {
                     let _ = span.enter();
-                    tracing::info!({code = %response.status().as_u16(), latency = %latency.as_millis()}, "processed")
+                    tracing::info!({code = %response.status().as_u16(), latency = %LatencyMillis::from(latency)}, "processed")
                 })
                 .on_eos(())
                 .on_failure(|error: ServerErrorsFailureClass, _: Duration, span: &Span| {
@@ -82,16 +98,13 @@ struct NsidCount {
     deleted_count: u128,
     last_seen: u64,
 }
+
 #[derive(Serialize)]
 struct Events {
     per_second: usize,
     events: HashMap<SmolStr, NsidCount>,
 }
-#[derive(Serialize)]
-struct EventsRef<'a> {
-    per_second: usize,
-    events: &'a HashMap<SmolStr, NsidCount>,
-}
+
 async fn events(db: State<Arc<Db>>) -> AppResult<Json<Events>> {
     let mut events = HashMap::new();
     for result in db.get_counts() {
@@ -116,10 +129,13 @@ async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |mut socket| {
         (async move {
             let mut listener = db.new_listener();
-            let mut buffer = HashMap::<SmolStr, NsidCount>::with_capacity(10);
+            let mut data = Events {
+                events: HashMap::<SmolStr, NsidCount>::with_capacity(10),
+                per_second: 0,
+            };
             let mut updates = 0;
             while let Ok((nsid, counts)) = listener.recv().await {
-                buffer.insert(
+                data.events.insert(
                     nsid,
                     NsidCount {
                         count: counts.count,
@@ -129,15 +145,11 @@ async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {
                 );
                 updates += 1;
                 // send 20 times every second max
-                let per_second = db.eps();
-                if updates >= per_second / 20 {
-                    let msg = serde_json::to_string(&EventsRef {
-                        events: &buffer,
-                        per_second,
-                    })
-                    .unwrap();
+                data.per_second = db.eps();
+                if updates >= data.per_second / 16 {
+                    let msg = serde_json::to_string(&data).unwrap();
                     let res = socket.send(Message::text(msg)).await;
-                    buffer.clear();
+                    data.events.clear();
                     updates = 0;
                     if let Err(err) = res {
                         tracing::error!("error sending event: {err}");
