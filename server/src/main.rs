@@ -1,50 +1,25 @@
 use std::{ops::Deref, sync::Arc};
 
-use atproto_jetstream::{CancellationToken, Consumer, EventHandler, JetstreamEvent};
 use smol_str::ToSmolStr;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     api::serve,
     db::{Db, EventRecord},
+    error::AppError,
+    jetstream::JetstreamClient,
 };
 
 mod api;
 mod db;
 mod error;
+mod jetstream;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
-
-const BSKY_ZSTD_DICT: &[u8] = include_bytes!("./bsky_zstd_dictionary");
-
-struct JetstreamHandler {
-    tx: Sender<EventRecord>,
-}
-
-impl JetstreamHandler {
-    fn new() -> (Self, Receiver<EventRecord>) {
-        let (tx, rx) = tokio::sync::mpsc::channel(1000);
-        (Self { tx }, rx)
-    }
-}
-
-#[async_trait::async_trait]
-impl EventHandler for JetstreamHandler {
-    async fn handle_event(&self, event: JetstreamEvent) -> anyhow::Result<()> {
-        if let Some(e) = EventRecord::from_jetstream(event) {
-            self.tx.send(e).await?;
-        }
-        Ok(())
-    }
-
-    fn handler_id(&self) -> String {
-        "handler".to_string()
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -60,37 +35,44 @@ async fn main() {
 
     let db = Arc::new(Db::new(".fjall_data").expect("couldnt create db"));
 
-    tokio::fs::write("./bsky_zstd_dictionary", BSKY_ZSTD_DICT)
-        .await
-        .expect("could not write bsky zstd dict");
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("cant install rustls crypto provider");
 
-    let jetstream = Consumer::new(atproto_jetstream::ConsumerTaskConfig {
-        compression: true,
-        jetstream_hostname: "jetstream2.us-west.bsky.network".into(),
-        collections: Vec::new(),
-        dids: Vec::new(),
-        max_message_size_bytes: None,
-        cursor: None,
-        require_hello: true,
-        zstd_dictionary_location: "./bsky_zstd_dictionary".into(),
-        user_agent: "nsid-tracker/0.0.1".into(),
-    });
-
-    let (event_handler, mut event_rx) = JetstreamHandler::new();
+    let mut jetstream =
+        match JetstreamClient::new("wss://jetstream2.us-west.bsky.network/subscribe") {
+            Ok(client) => client,
+            Err(err) => {
+                tracing::error!("can't create jetstream client: {err}");
+                return;
+            }
+        };
 
     let cancel_token = CancellationToken::new();
-    tokio::spawn(async move {
-        jetstream
-            .register_handler(Arc::new(event_handler))
-            .await
-            .expect("cant register handler");
-        jetstream
-            .run_background(cancel_token.clone())
-            .await
-            .expect("cant run jetstream");
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1000);
+
+    let consume_events = tokio::spawn({
+        let consume_cancel = cancel_token.child_token();
+        async move {
+            jetstream.connect().await?;
+            loop {
+                tokio::select! {
+                    maybe_event = jetstream.read(consume_cancel.child_token()) => match maybe_event {
+                        Ok(event) => {
+                            let Some(record) = EventRecord::from_jetstream(event) else {
+                                continue;
+                            };
+                            let _ = event_tx.send(record).await;
+                        }
+                        Err(err) => return Err(err),
+                    },
+                    _ = consume_cancel.cancelled() => break Ok(()),
+                }
+            }
+        }
     });
 
-    std::thread::spawn({
+    let ingest_events = std::thread::spawn({
         let db = db.clone();
         move || {
             tracing::info!("starting ingest events thread...");
@@ -102,7 +84,30 @@ async fn main() {
         }
     });
 
-    serve(db).await;
+    tokio::select! {
+        res = serve(db, cancel_token.child_token()) => {
+            if let Err(e) = res {
+                tracing::error!("serve failed: {}", e);
+            }
+        }
+        res = consume_events => {
+            let err =
+                res
+                .map_err(AppError::from)
+                .and_then(std::convert::identity)
+                .expect_err("consume events cant return ok");
+            tracing::error!("consume events failed: {}", err);
+        },
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("received ctrl+c!");
+            cancel_token.cancel();
+        }
+    }
+
+    tracing::info!("shutting down...");
+    ingest_events
+        .join()
+        .expect("failed to join ingest events thread");
 }
 
 fn migrate_to_miniz() {

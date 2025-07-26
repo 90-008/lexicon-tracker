@@ -1,12 +1,14 @@
 use std::{ops::Deref, path::Path};
 
-use atproto_jetstream::JetstreamEvent;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
 use tokio::sync::broadcast;
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    jetstream::JetstreamEvent,
+};
 
 #[derive(Clone, Debug, Default, Archive, Deserialize, Serialize, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]

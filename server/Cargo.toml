@@ -9,14 +9,18 @@ async-trait = "0.1"
 tracing-subscriber = "0.3"
 tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8", features = ["json", "ws"] }
-tower-http = {version = "0.6", features = ["request-id"]}
-atproto-jetstream = "0.9"
+tokio-util = { version = "0.7", features = ["tracing"] }
+rustls = { version = "0.23", default-features = false, features = ["log", "ring", "std"] }
+tokio-websockets = { version = "0.12", features = ["client", "rustls-platform-verifier", "getrandom", "ring"] }
+futures-util = "0.3"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "tracing", "json"] }
+axum-tws = { git = "https://github.com/90-008/axum-tws.git" }
+tower-http = {version = "0.6", features = ["request-id", "trace"]}
 fjall = { version = "2", default-features = false, features = ["miniz", "lz4"] }
 rkyv = {version = "0.8", features = ["unaligned"]}
 smol_str = { version = "0.3", features = ["serde"] }
 papaya = "0.2"
-serde = "1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.141"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

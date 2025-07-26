@@ -1,11 +1,11 @@
-use std::{error::Error, fmt::Display};
+use std::fmt::Display;
 
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 
 #[derive(Debug)]
 pub struct AppError {
-    inner: Box<dyn Error + Send + 'static>,
+    inner: anyhow::Error,
 }
 
 impl Display for AppError {
@@ -14,11 +14,12 @@ impl Display for AppError {
     }
 }
 
-impl<E: Error + Send + 'static> From<E> for AppError {
-    fn from(value: E) -> Self {
-        Self {
-            inner: Box::new(value),
-        }
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self { inner: err.into() }
     }
 }
 
