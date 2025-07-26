@@ -1,6 +1,6 @@
 <script lang="ts">
     import { dev } from "$app/environment";
-    import type { EventRecord, NsidCounts } from "$lib/types";
+    import type { EventRecord, NsidCount } from "$lib/types";
     import { onMount, onDestroy } from "svelte";
     import { writable } from "svelte/store";
     import { PUBLIC_API_URL } from "$env/static/public";
@@ -11,8 +11,8 @@
     import EventCard from "$lib/components/EventCard.svelte";
     import FilterControls from "$lib/components/FilterControls.svelte";
 
-    const events = writable(new Map<string, NsidCounts>());
-    let eventsList: EventRecord[] = $state([]);
+    const events = writable(new Map<string, EventRecord>());
+    let eventsList: NsidCount[] = $state([]);
     events.subscribe((value) => {
         eventsList = value
             .entries()
@@ -23,35 +23,9 @@
             .toArray();
         eventsList.sort((a, b) => b.count - a.count);
     });
+    let per_second = $state(0);
 
-    // Backpressure system
-    let eventBuffer: EventRecord[] = [];
-    let updateTimer: number | null = null;
-    const BATCH_SIZE = 10;
-    const UPDATE_INTERVAL = 100; // ms
-
-    const flushEventBuffer = () => {
-        if (eventBuffer.length === 0) return;
-
-        events.update((map) => {
-            for (const event of eventBuffer) {
-                map.set(event.nsid, event);
-            }
-            return map;
-        });
-
-        eventBuffer = [];
-    };
-
-    const scheduleUpdate = () => {
-        if (updateTimer !== null) return;
-
-        updateTimer = window.setTimeout(() => {
-            flushEventBuffer();
-            updateTimer = null;
-        }, UPDATE_INTERVAL);
-    };
-    let all: NsidCounts = $derived(
+    let all: EventRecord = $derived(
         eventsList.reduce(
             (acc, event) => {
                 return {
@@ -92,25 +66,17 @@
             websocketStatus = "connected";
         };
         websocket.onmessage = async (event) => {
-            const view = new DataView(event.data);
-            const decoder = new TextDecoder("utf-8");
-            const jsonStr = decoder.decode(view);
-            const jsonData = JSON.parse(jsonStr);
+            const jsonData = JSON.parse(event.data);
 
-            // Add to buffer instead of immediate update
-            eventBuffer.push(jsonData);
-
-            // If buffer is full, flush immediately
-            if (eventBuffer.length >= BATCH_SIZE) {
-                if (updateTimer !== null) {
-                    window.clearTimeout(updateTimer);
-                    updateTimer = null;
-                }
-                flushEventBuffer();
-            } else {
-                // Otherwise schedule a delayed update
-                scheduleUpdate();
+            if (jsonData.per_second > 0) {
+                per_second = jsonData.per_second;
             }
+            events.update((map) => {
+                for (const [nsid, event] of Object.entries(jsonData.events)) {
+                    map.set(nsid, event as EventRecord);
+                }
+                return map;
+            });
         };
         websocket.onerror = (error) => {
             console.error("ws error:", error);
@@ -120,13 +86,6 @@
             console.log("ws closed");
             isStreamOpen = false;
             websocketStatus = "disconnected";
-
-            // Flush any remaining events when connection closes
-            if (updateTimer !== null) {
-                window.clearTimeout(updateTimer);
-                updateTimer = null;
-            }
-            flushEventBuffer();
         };
     };
 
@@ -134,9 +93,10 @@
         try {
             error = null;
             const data = await fetchEvents();
+            per_second = data.per_second;
             events.update((map) => {
-                for (const event of data) {
-                    map.set(event.nsid, event);
+                for (const [nsid, event] of Object.entries(data.events)) {
+                    map.set(nsid, event);
                 }
                 return map;
             });
@@ -155,20 +115,13 @@
     });
 
     onDestroy(() => {
-        // Clean up timer and flush any remaining events
-        if (updateTimer !== null) {
-            window.clearTimeout(updateTimer);
-            updateTimer = null;
-        }
-        flushEventBuffer();
-
         // Close WebSocket connection
         if (websocket) {
             websocket.close();
         }
     });
 
-    const filterEvents = (events: EventRecord[]) => {
+    const filterEvents = (events: NsidCount[]) => {
         let filtered = events;
 
         // Apply regex filter
@@ -207,7 +160,7 @@
     </header>
 
     <div
-        class="mx-auto w-fit grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-5 mb-8"
+        class="mx-auto w-fit grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-5 mb-8"
     >
         <StatsCard
             title="total creation"
@@ -218,6 +171,11 @@
             title="total deletion"
             value={all.deleted_count}
             colorScheme="red"
+        />
+        <StatsCard
+            title="per second"
+            value={per_second}
+            colorScheme="turqoise"
         />
         <StatsCard
             title="unique collections"

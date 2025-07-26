@@ -1,6 +1,7 @@
-use std::{ops::Deref, path::Path};
+use std::{ops::Deref, path::Path, time::Duration};
 
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
+use pingora_limits::rate::Rate;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
 use tokio::sync::broadcast;
@@ -59,6 +60,7 @@ pub struct Db {
     hits: papaya::HashMap<SmolStr, Partition>,
     counts: Partition,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
+    eps: Rate,
 }
 
 impl Db {
@@ -75,7 +77,12 @@ impl Db {
             )?,
             inner: ks,
             event_broadcaster: broadcast::channel(1000).0,
+            eps: Rate::new(Duration::from_secs(1)),
         })
+    }
+
+    pub fn eps(&self) -> usize {
+        self.eps.rate(&()) as usize
     }
 
     pub fn new_listener(&self) -> broadcast::Receiver<(SmolStr, NsidCounts)> {
@@ -119,6 +126,7 @@ impl Db {
         if self.event_broadcaster.receiver_count() > 0 {
             let _ = self.event_broadcaster.send((SmolStr::new(&nsid), counts));
         }
+        self.eps.observe(&(), 1);
         Ok(())
     }
 

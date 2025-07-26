@@ -1,14 +1,6 @@
 <script lang="ts">
     import { formatNumber } from "$lib/format";
 
-    interface Props {
-        title: string;
-        value: number;
-        colorScheme: "green" | "red" | "orange";
-    }
-
-    let { title, value, colorScheme }: Props = $props();
-
     const colorClasses = {
         green: {
             bg: "from-green-50 to-green-100",
@@ -22,6 +14,12 @@
             titleText: "text-red-700",
             valueText: "text-red-900",
         },
+        turqoise: {
+            bg: "from-teal-50 to-teal-100",
+            border: "border-teal-200",
+            titleText: "text-teal-700",
+            valueText: "text-teal-900",
+        },
         orange: {
             bg: "from-orange-50 to-orange-100",
             border: "border-orange-200",
@@ -29,6 +27,14 @@
             valueText: "text-orange-900",
         },
     };
+
+    interface Props {
+        title: string;
+        value: number;
+        colorScheme: keyof typeof colorClasses;
+    }
+
+    let { title, value, colorScheme }: Props = $props();
 
     const colors = $derived(colorClasses[colorScheme]);
 </script>

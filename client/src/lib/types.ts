@@ -1,11 +1,14 @@
+export type Events = {
+  per_second: number;
+  events: Record<string, EventRecord>;
+};
 export type EventRecord = {
-  nsid: string;
   last_seen: number;
   count: number;
   deleted_count: number;
 };
-
-export type NsidCounts = {
+export type NsidCount = {
+  nsid: string;
   last_seen: number;
   count: number;
   deleted_count: number;
