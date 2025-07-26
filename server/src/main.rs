@@ -4,6 +4,8 @@ use smol_str::ToSmolStr;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tokio_util::sync::CancellationToken;
+use tracing::Level;
+use tracing_subscriber::EnvFilter;
 
 use crate::{
     api::serve,
@@ -23,7 +25,14 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::fmt().compact().init();
+    tracing_subscriber::fmt::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(Level::INFO.into())
+                .from_env_lossy(),
+        )
+        .compact()
+        .init();
 
     if std::env::args()
         .nth(1)
