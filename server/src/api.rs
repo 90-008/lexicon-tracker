@@ -128,9 +128,9 @@ async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {
                     },
                 );
                 updates += 1;
-                // send 10 times every second max
+                // send 20 times every second max
                 let per_second = db.eps();
-                if updates >= per_second / 10 {
+                if updates >= per_second / 20 {
                     let msg = serde_json::to_string(&EventsRef {
                         events: &buffer,
                         per_second,
