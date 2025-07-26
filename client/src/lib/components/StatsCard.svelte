@@ -42,10 +42,10 @@
 <div
     class="bg-gradient-to-r {colors.bg} p-3 md:p-6 rounded-lg border {colors.border}"
 >
-    <h3 class="text-base font-medium {colors.titleText} mb-2">
+    <h3 class="text-sm md:text-base font-medium {colors.titleText} mb-2">
         {title}
     </h3>
-    <p class="text-3xl font-bold {colors.valueText}">
+    <p class="text-base md:text-3xl font-bold {colors.valueText}">
         {formatNumber(value)}
     </p>
 </div>
