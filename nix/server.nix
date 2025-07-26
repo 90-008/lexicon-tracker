@@ -8,5 +8,10 @@ rustPlatform.buildRustPackage {
 
   src = ../server;
 
-  cargoLock.lockFile = ../server/Cargo.lock;
+  cargoLock = {
+    lockFile = ../server/Cargo.lock;
+    outputHashes = {
+      "axum-tws-0.5.0" = "sha256-29LqmGmXRw4wcia4S9ht+WABi/TN3Ws68kMEm97NyjQ=";
+    };
+  };
 }
