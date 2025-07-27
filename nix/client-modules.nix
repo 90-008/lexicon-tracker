@@ -8,7 +8,7 @@ stdenv.mkDerivation {
 
   src = ../client;
 
-  outputHash = "sha256-TzTafbNTng/mMyf0yR9Rc6XS9/zzipwmK9SUWm2XxeY=";
+  outputHash = "sha256-t8PJFo+3XGkzmMNbw9Rf9cS5Ob5YtI8ucX3ay+u9a3M=";
   outputHashAlgo = "sha256";
   outputHashMode = "recursive";
 
