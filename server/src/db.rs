@@ -205,6 +205,23 @@ impl Db {
             },
         )))
     }
+
+    pub fn tracking_since(&self) -> AppResult<u64> {
+        let _guard = self.hits.guard();
+        // HACK: we should actually store when we started tracking but im lazy
+        // should be accurate enough
+        let Some(tree) = self.hits.get("app.bsky.feed.like", &_guard) else {
+            return Ok(0);
+        };
+
+        let Some((timestamp_raw, _)) = tree.first_key_value()? else {
+            return Ok(0);
+        };
+
+        Ok(u64::from_be_bytes(
+            timestamp_raw.as_ref().try_into().unwrap(),
+        ))
+    }
 }
 
 type TimestampRepr = [u8; 8];

@@ -51,6 +51,7 @@ pub async fn serve(db: Arc<Db>, cancel_token: CancellationToken) -> AppResult<()
         .route("/events", get(events))
         .route("/stream_events", get(stream_events))
         .route("/hits", get(hits))
+        .route("/since", get(since))
         .route_layer(CompressionLayer::new().br(true).deflate(true).gzip(true).zstd(true))
         .route_layer(PropagateRequestIdLayer::x_request_id())
         .route_layer(
@@ -218,4 +219,15 @@ async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {
         })
         .instrument(span)
     })
+}
+
+#[derive(Debug, Serialize)]
+struct Since {
+    since: u64,
+}
+
+async fn since(db: State<Arc<Db>>) -> AppResult<Json<Since>> {
+    Ok(Json(Since {
+        since: db.tracking_since()?,
+    }))
 }
