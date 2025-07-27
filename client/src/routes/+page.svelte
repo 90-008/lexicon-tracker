@@ -149,7 +149,7 @@
     />
 </svelte:head>
 
-<div class="md:max-w-[60vw] mx-auto p-2">
+<div class="md:max-w-[61vw] mx-auto p-2">
     <header class="text-center mb-8">
         <h1 class="text-4xl font-bold mb-2 text-gray-900">
             bluesky event tracker
@@ -159,9 +159,7 @@
         </p>
     </header>
 
-    <div
-        class="mx-auto w-fit grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-5 mb-8"
-    >
+    <div class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 mb-8">
         <StatsCard
             title="total creation"
             value={all.count}
@@ -206,7 +204,9 @@
                 onFilterChange={(value) => (filterRegex = value)}
                 onBskyToggle={() => (dontShowBsky = !dontShowBsky)}
             />
-            <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div
+                class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4"
+            >
                 {#each filterEvents(eventsList) as event, index (event.nsid)}
                     <EventCard {event} {index} />
                 {/each}

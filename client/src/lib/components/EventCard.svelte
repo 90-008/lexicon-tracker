@@ -1,10 +1,10 @@
 <script lang="ts">
     import { formatNumber, formatTimestamp } from "$lib/format";
-    import type { EventRecord } from "$lib/types";
+    import type { NsidCount } from "$lib/types";
     import { onMount, onDestroy } from "svelte";
 
     interface Props {
-        event: EventRecord;
+        event: NsidCount;
         index: number;
     }
 
@@ -19,7 +19,7 @@
     let isAnimating = $state(false);
 
     // Constants for border behavior
-    const MAX_BORDER_THICKNESS = 7; // Maximum border thickness in pixels
+    const MAX_BORDER_THICKNESS = 6; // Maximum border thickness in pixels
     const INITIAL_THICKNESS_ADD = 2; // How much thickness to add for first/slow events
     const RAPID_SUCCESSION_THRESHOLD = 50; // ms - events faster than this are considered rapid
     const DECAY_RATE = 0.1; // How much thickness to remove per decay tick
@@ -104,27 +104,34 @@
 </script>
 
 <div
-    class="mx-auto md:mx-0 bg-white border border-gray-200 rounded-lg p-2 md:p-6 hover:shadow-lg transition-all duration-200 hover:-translate-y-1 transform"
+    class="group flex flex-col gap-2 p-1.5 md:p-3 min-h-64 bg-white border border-gray-200 rounded-lg hover:shadow-lg md:hover:-translate-y-1 transition-all duration-200 transform"
     class:has-activity={isAnimating}
     style="--border-thickness: {borderThickness}px"
 >
-    <div class="flex justify-between items-start mb-3">
+    <div class="flex items-start gap-2">
         <div
             class="text-sm font-bold text-blue-600 bg-blue-100 px-3 py-1 rounded-full"
         >
             #{index + 1}
         </div>
+        <div
+            title={event.nsid}
+            class="font-mono text-sm text-gray-700 mt-0.5 leading-relaxed rounded-full text-nowrap text-ellipsis overflow-hidden group-hover:overflow-visible group-hover:bg-gray-50 border-gray-100 group-hover:border transition-all px-1"
+        >
+            {event.nsid}
+        </div>
     </div>
-    <div class="font-mono text-sm text-gray-700 mb-2 break-all leading-relaxed">
-        {event.nsid}
+    <div class="mt-auto flex flex-col gap-1">
+        <div class="text-3xl font-bold text-green-600">
+            {formatNumber(event.count)}
+            <div class="text-xl">created</div>
+        </div>
+        <div class="text-3xl font-bold text-red-600">
+            {formatNumber(event.deleted_count)}
+            <div class="text-xl">deleted</div>
+        </div>
     </div>
-    <div class="text-lg font-bold text-green-600">
-        {formatNumber(event.count)} created
-    </div>
-    <div class="text-lg font-bold text-red-600 mb-3">
-        {formatNumber(event.deleted_count)} deleted
-    </div>
-    <div class="text-xs text-gray-500">
+    <div class="text-xs text-gray-500 mt-auto">
         last: {formatTimestamp(event.last_seen)}
     </div>
 </div>
