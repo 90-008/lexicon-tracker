@@ -53,7 +53,7 @@
     let dontShowBsky = $state(false);
     let sortBy: SortOption = $state("total");
     let refreshRate = $state("");
-    let previousRefreshRate = $state("");
+    let changedByUser = $state(false);
 
     let websocket: WebSocket | null = null;
     let isStreamOpen = $state(false);
@@ -126,21 +126,6 @@
             console.error("error loading data:", err);
         }
     };
-
-    // Set refresh rate when sort mode changes
-    $effect(() => {
-        if (sortBy === "date" && refreshRate === "") {
-            // Only set to 2 if we're in real-time mode
-            refreshRate = "2";
-        } else if (
-            sortBy !== "date" &&
-            refreshRate === "2" &&
-            previousRefreshRate === "2"
-        ) {
-            // Return to real-time mode if we auto-set the refresh rate
-            refreshRate = "";
-        }
-    });
 
     // Update the refresh timer when refresh rate changes
     $effect(() => {
@@ -295,13 +280,19 @@
                 />
                 <SortControls
                     {sortBy}
-                    onSortChange={(value: SortOption) => (sortBy = value)}
+                    onSortChange={(value: SortOption) => {
+                        sortBy = value;
+                        if (refreshRate === "" && sortBy === "date")
+                            refreshRate = "2";
+                        else if (refreshRate === "2" && changedByUser === false)
+                            refreshRate = "";
+                    }}
                 />
                 <RefreshControl
                     {refreshRate}
                     onRefreshChange={(value) => {
-                        previousRefreshRate = refreshRate;
                         refreshRate = value;
+                        changedByUser = refreshRate !== "";
                     }}
                 />
             </div>
