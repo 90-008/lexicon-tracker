@@ -1,15 +1,27 @@
 use std::{
-    collections::HashMap, fmt::Display, net::SocketAddr, ops::Deref, sync::Arc, time::Duration,
+    collections::HashMap,
+    fmt::Display,
+    net::SocketAddr,
+    ops::Deref,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
 };
 
 use anyhow::anyhow;
-use axum::{Json, Router, extract::State, http::Request, response::Response, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::Request,
+    response::Response,
+    routing::get,
+};
 use axum_tws::{Message, WebSocketUpgrade};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use tokio_util::sync::CancellationToken;
 use tower_http::{
     classify::ServerErrorsFailureClass,
+    compression::CompressionLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
@@ -38,6 +50,8 @@ pub async fn serve(db: Arc<Db>, cancel_token: CancellationToken) -> AppResult<()
     let app = Router::new()
         .route("/events", get(events))
         .route("/stream_events", get(stream_events))
+        .route("/hits", get(hits))
+        .route_layer(CompressionLayer::new().br(true).deflate(true).gzip(true).zstd(true))
         .route_layer(PropagateRequestIdLayer::x_request_id())
         .route_layer(
             TraceLayer::new_for_http()
@@ -122,6 +136,50 @@ async fn events(db: State<Arc<Db>>) -> AppResult<Json<Events>> {
         events,
         per_second: db.eps(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct HitsQuery {
+    nsid: SmolStr,
+    from: Option<u64>,
+    to: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct Hit {
+    timestamp: u64,
+    deleted: bool,
+}
+
+const MAX_HITS: usize = 100_000;
+
+async fn hits(
+    State(db): State<Arc<Db>>,
+    Query(params): Query<HitsQuery>,
+) -> AppResult<Json<Vec<Hit>>> {
+    let maybe_hits = db
+        .get_hits(
+            &params.nsid,
+            params.to.unwrap_or(0)
+                ..params.from.unwrap_or(
+                    std::time::SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("oops")
+                        .as_micros() as u64,
+                ),
+        )?
+        .take(MAX_HITS);
+    let mut hits = Vec::with_capacity(maybe_hits.size_hint().0);
+
+    for maybe_hit in maybe_hits {
+        let (timestamp, hit) = maybe_hit?;
+        hits.push(Hit {
+            timestamp,
+            deleted: hit.deleted,
+        });
+    }
+
+    Ok(Json(hits))
 }
 
 async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {

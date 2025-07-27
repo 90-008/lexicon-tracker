@@ -1,4 +1,8 @@
-use std::{ops::Deref, path::Path, time::Duration};
+use std::{
+    ops::{Bound, Deref, RangeBounds},
+    path::Path,
+    time::Duration,
+};
 
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use pingora_limits::rate::Rate;
@@ -180,16 +184,44 @@ impl Db {
     pub fn get_hits(
         &self,
         nsid: &str,
-    ) -> AppResult<impl Iterator<Item = AppResult<(u64, NsidHit)>>> {
-        self.run_in_nsid_tree(nsid, |tree| {
-            Ok(tree.iter().map(|res| {
+        range: impl RangeBounds<u64>,
+    ) -> AppResult<Box<dyn Iterator<Item = AppResult<(u64, NsidHit)>>>> {
+        let start = range.start_bound().cloned().map(u64::to_be_bytes);
+        let end = range.end_bound().cloned().map(u64::to_be_bytes);
+
+        let _guard = self.hits.guard();
+        let Some(tree) = self.hits.get(nsid, &_guard) else {
+            return Ok(Box::new(std::iter::empty()));
+        };
+
+        Ok(Box::new(tree.range(TimestampRange { start, end }).map(
+            |res| {
                 res.map_err(AppError::from).map(|(key, val)| {
                     (
                         u64::from_be_bytes(key.as_ref().try_into().unwrap()),
                         unsafe { rkyv::from_bytes_unchecked::<_, Error>(&val).unwrap_unchecked() },
                     )
                 })
-            }))
-        })
+            },
+        )))
+    }
+}
+
+type TimestampRepr = [u8; 8];
+
+struct TimestampRange {
+    start: Bound<TimestampRepr>,
+    end: Bound<TimestampRepr>,
+}
+
+impl RangeBounds<TimestampRepr> for TimestampRange {
+    #[inline(always)]
+    fn start_bound(&self) -> Bound<&TimestampRepr> {
+        self.start.as_ref()
+    }
+
+    #[inline(always)]
+    fn end_bound(&self) -> Bound<&TimestampRepr> {
+        self.end.as_ref()
     }
 }

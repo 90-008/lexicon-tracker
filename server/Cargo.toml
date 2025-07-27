@@ -13,10 +13,10 @@ tokio-util = { version = "0.7", features = ["tracing"] }
 rustls = { version = "0.23", default-features = false, features = ["log", "ring", "std"] }
 tokio-websockets = { version = "0.12", features = ["client", "rustls-platform-verifier", "getrandom", "ring"] }
 futures-util = "0.3"
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "tracing", "json"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "tracing", "json", "query"] }
 axum-tws = { git = "https://github.com/90-008/axum-tws.git", features = ["http2"] }
 pingora-limits = "0.5"
-tower-http = {version = "0.6", features = ["request-id", "trace"]}
+tower-http = {version = "0.6", features = ["request-id", "trace", "compression-full"]}
 fjall = { version = "2", default-features = false, features = ["miniz", "lz4"] }
 rkyv = {version = "0.8", features = ["unaligned"]}
 smol_str = { version = "0.3", features = ["serde"] }

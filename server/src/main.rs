@@ -126,7 +126,7 @@ fn migrate_to_miniz() {
     let mut total_count = 0_u64;
     for nsid in from.get_nsids() {
         tracing::info!("migrating {} ...", nsid.deref());
-        for hit in from.get_hits(&nsid).expect("cant read hits") {
+        for hit in from.get_hits(&nsid, ..).expect("cant read hits") {
             let (timestamp, data) = hit.expect("cant read event");
             to.record_event(EventRecord {
                 nsid: nsid.to_smolstr(),
