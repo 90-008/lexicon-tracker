@@ -289,13 +289,13 @@
                     {filterRegex}
                     onFilterChange={(value) => (filterRegex = value)}
                 />
-                <SortControls
-                    {sortBy}
-                    onSortChange={(value: SortOption) => (sortBy = value)}
-                />
                 <BskyToggle
                     {dontShowBsky}
                     onBskyToggle={() => (dontShowBsky = !dontShowBsky)}
+                />
+                <SortControls
+                    {sortBy}
+                    onSortChange={(value: SortOption) => (sortBy = value)}
                 />
                 <RefreshControl
                     {refreshRate}
