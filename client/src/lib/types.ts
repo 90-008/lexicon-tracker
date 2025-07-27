@@ -13,3 +13,5 @@ export type NsidCount = {
   count: number;
   deleted_count: number;
 };
+
+export type SortOption = "total" | "created" | "deleted" | "date";
