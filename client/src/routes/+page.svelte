@@ -53,7 +53,7 @@
     let dontShowBsky = $state(false);
     let sortBy: SortOption = $state("total");
     let refreshRate = $state("");
-    let previousRefreshRate = "";
+    let previousRefreshRate = $state("");
 
     let websocket: WebSocket | null = null;
     let isStreamOpen = $state(false);
@@ -129,14 +129,16 @@
 
     // Set refresh rate when sort mode changes
     $effect(() => {
-        if (sortBy === "date" && !refreshRate) {
-            // Only set to 2 if currently empty (real-time)
-            previousRefreshRate = "";
+        if (sortBy === "date" && refreshRate === "") {
+            // Only set to 2 if we're in real-time mode
             refreshRate = "2";
-        } else if (refreshRate === "2" && sortBy !== "date") {
-            // Only restore to empty if we auto-set it and switching away from date
-            refreshRate = previousRefreshRate;
-            previousRefreshRate = "";
+        } else if (
+            sortBy !== "date" &&
+            refreshRate === "2" &&
+            previousRefreshRate === "2"
+        ) {
+            // Return to real-time mode if we auto-set the refresh rate
+            refreshRate = "";
         }
     });
 
@@ -297,7 +299,10 @@
                 />
                 <RefreshControl
                     {refreshRate}
-                    onRefreshChange={(value) => (refreshRate = value)}
+                    onRefreshChange={(value) => {
+                        previousRefreshRate = refreshRate;
+                        refreshRate = value;
+                    }}
                 />
             </div>
             <div
