@@ -149,14 +149,17 @@
     />
 </svelte:head>
 
-<div class="md:max-w-[61vw] mx-auto p-2">
-    <header class="text-center mb-8">
-        <h1 class="text-4xl font-bold mb-2 text-gray-900">lexicon tracker</h1>
-        <p class="text-lg text-gray-600">
+<header class="border-gray-300 border-b mb-4 pb-2">
+    <div
+        class="px-2 md:ml-[19vw] mx-auto flex flex-wrap items-center text-center"
+    >
+        <h1 class="text-4xl font-bold mr-4 text-gray-900">lexicon tracker</h1>
+        <p class="text-lg mt-1 text-gray-600">
             tracks lexicons seen on the jetstream
         </p>
-    </header>
-
+    </div>
+</header>
+<div class="md:max-w-[61vw] mx-auto p-2">
     <div
         class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 2xl:mx-16 mb-8"
     >
