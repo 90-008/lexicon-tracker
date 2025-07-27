@@ -235,9 +235,7 @@
     </div>
 </header>
 <div class="md:max-w-[61vw] mx-auto p-2">
-    <div
-        class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 2xl:mx-16 mb-8"
-    >
+    <div class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 mb-8">
         <StatsCard
             title="total creation"
             value={all.count}

@@ -40,13 +40,11 @@
     const colors = $derived(colorClasses[colorScheme]);
 </script>
 
-<div
-    class="bg-gradient-to-r {colors.bg} p-3 md:p-6 rounded-lg border {colors.border}"
->
+<div class="bg-gradient-to-r {colors.bg} p-3 rounded-lg border {colors.border}">
     <h3 class="text-base font-medium {colors.titleText} mb-2">
         {title}
     </h3>
-    <p class="text-xl md:text-3xl font-bold {colors.valueText}">
+    <p class="text-xl md:text-2xl font-bold {colors.valueText}">
         <NumberFlow {value} />
     </p>
 </div>
