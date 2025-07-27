@@ -142,7 +142,7 @@
 </script>
 
 <svelte:head>
-    <title>bluesky jetstream tracker</title>
+    <title>lexicon tracker</title>
     <meta
         name="description"
         content="tracks bluesky jetstream events by collection"
@@ -151,15 +151,15 @@
 
 <div class="md:max-w-[61vw] mx-auto p-2">
     <header class="text-center mb-8">
-        <h1 class="text-4xl font-bold mb-2 text-gray-900">
-            bluesky event tracker
-        </h1>
-        <p class="text-gray-600">
-            tracking of bluesky events by collection from the jetstream
+        <h1 class="text-4xl font-bold mb-2 text-gray-900">lexicon tracker</h1>
+        <p class="text-lg text-gray-600">
+            tracks lexicons seen on the jetstream
         </p>
     </header>
 
-    <div class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 mb-8">
+    <div
+        class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 2xl:mx-16 mb-8"
+    >
         <StatsCard
             title="total creation"
             value={all.count}
@@ -193,9 +193,7 @@
     {#if eventsList.length > 0}
         <div class="mb-8">
             <div class="flex flex-wrap items-center gap-3 mb-3">
-                <h2 class="text-2xl font-bold text-gray-900">
-                    events by collection
-                </h2>
+                <h2 class="text-2xl font-bold text-gray-900">seen lexicons</h2>
                 <StatusBadge status={websocketStatus} />
             </div>
             <FilterControls
@@ -215,7 +213,7 @@
     {:else}
         <div class="text-center py-12 bg-gray-50 rounded-lg">
             <div class="text-gray-400 text-4xl mb-4">📊</div>
-            <p class="text-gray-600">no events tracked yet.</p>
+            <p class="text-gray-600">no events tracked yet. try refreshing?</p>
         </div>
     {/if}
 </div>
