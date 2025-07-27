@@ -4,7 +4,7 @@
     import { onMount, onDestroy } from "svelte";
     import { writable } from "svelte/store";
     import { PUBLIC_API_URL } from "$env/static/public";
-    import { fetchEvents } from "$lib/api";
+    import { fetchEvents, fetchTrackingSince } from "$lib/api";
     import { createRegexFilter } from "$lib/filter";
     import StatsCard from "$lib/components/StatsCard.svelte";
     import StatusBadge from "$lib/components/StatusBadge.svelte";
@@ -13,6 +13,7 @@
     import SortControls from "$lib/components/SortControls.svelte";
     import BskyToggle from "$lib/components/BskyToggle.svelte";
     import RefreshControl from "$lib/components/RefreshControl.svelte";
+    import { formatTimestamp } from "$lib/format";
 
     const events = writable(new Map<string, EventRecord>());
     const pendingUpdates = new Map<string, EventRecord>();
@@ -28,6 +29,7 @@
             .toArray();
     });
     let per_second = $state(0);
+    let tracking_since = $state(0);
 
     let all: EventRecord = $derived(
         eventsList.reduce(
@@ -118,6 +120,7 @@
                 }
                 return map;
             });
+            tracking_since = (await fetchTrackingSince()).since;
         } catch (err) {
             error =
                 err instanceof Error
@@ -225,7 +228,9 @@
     >
         <h1 class="text-4xl font-bold mr-4 text-gray-900">lexicon tracker</h1>
         <p class="text-lg mt-1 text-gray-600">
-            tracks lexicons seen on the jetstream
+            tracks lexicons seen on the jetstream {tracking_since === 0
+                ? ""
+                : `(since: ${formatTimestamp(tracking_since)})`}
         </p>
     </div>
 </header>
