@@ -44,7 +44,11 @@ async fn main() {
             debug();
             return;
         }
-        _ => {}
+        Some(x) => {
+            tracing::error!("unknown command: {}", x);
+            return;
+        }
+        None => {}
     }
 
     let db = Arc::new(Db::new(".fjall_data").expect("couldnt create db"));
