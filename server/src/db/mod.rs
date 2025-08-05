@@ -10,7 +10,7 @@ use std::{
 };
 
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use ordered_varint::Variable;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
@@ -147,8 +147,6 @@ impl LexiconHandle {
         Ok(written)
     }
 }
-
-type BoxedIter<T> = Box<dyn Iterator<Item = T>>;
 
 // counts is nsid -> NsidCounts
 // hits is tree per nsid: varint start time + varint end time -> block of hits
@@ -350,9 +348,9 @@ impl Db {
             .filter(|k| k.deref() != "_counts")
     }
 
-    pub fn get_hits_debug(&self, nsid: &str) -> BoxedIter<AppResult<(Slice, Slice)>> {
-        self.maybe_run_in_nsid_tree(nsid, |handle| -> BoxedIter<AppResult<(Slice, Slice)>> {
-            Box::new(
+    pub fn get_hits_debug(&self, nsid: &str) -> impl Iterator<Item = AppResult<(Slice, Slice)>> {
+        self.maybe_run_in_nsid_tree(nsid, |handle| {
+            Either::Left(
                 handle
                     .tree
                     .iter()
@@ -360,14 +358,14 @@ impl Db {
                     .map(|res| res.map_err(AppError::from)),
             )
         })
-        .unwrap_or_else(|| Box::new(std::iter::empty()))
+        .unwrap_or_else(|| Either::Right(std::iter::empty()))
     }
 
     pub fn get_hits(
         &self,
         nsid: &str,
         range: impl RangeBounds<u64> + std::fmt::Debug,
-    ) -> BoxedIter<AppResult<Item>> {
+    ) -> impl Iterator<Item = AppResult<Item>> {
         let start = range
             .start_bound()
             .cloned()
@@ -382,7 +380,7 @@ impl Db {
             Bound::Unbounded => u64::MAX,
         };
 
-        self.maybe_run_in_nsid_tree(nsid, move |handle| -> BoxedIter<AppResult<Item>> {
+        self.maybe_run_in_nsid_tree(nsid, move |handle| {
             let map_block = move |(key, val)| {
                 let mut key_reader = Cursor::new(key);
                 let start_timestamp = key_reader.read_varint::<u64>()?;
@@ -393,7 +391,7 @@ impl Db {
                 Ok(items)
             };
 
-            Box::new(
+            Either::Left(
                 handle
                     .tree
                     .range(TimestampRange { start, end })
@@ -402,7 +400,7 @@ impl Db {
                     .flatten(),
             )
         })
-        .unwrap_or_else(|| Box::new(std::iter::empty()))
+        .unwrap_or_else(|| Either::Right(std::iter::empty()))
     }
 
     pub fn tracking_since(&self) -> AppResult<u64> {
