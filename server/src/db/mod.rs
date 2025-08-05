@@ -4,7 +4,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant},
 };
@@ -162,9 +162,11 @@ type BoxedIter<T> = Box<dyn Iterator<Item = T>>;
 pub struct Db {
     inner: Keyspace,
     hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
+    syncpool: threadpool::ThreadPool,
     counts: Partition,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: Rate,
+    shutting_down: AtomicBool,
     min_block_size: usize,
     max_block_size: usize,
     max_last_activity: Duration,
@@ -178,6 +180,7 @@ impl Db {
             .open()?;
         Ok(Self {
             hits: Default::default(),
+            syncpool: threadpool::Builder::new().num_threads(256).build(),
             counts: ks.open_partition(
                 "_counts",
                 PartitionCreateOptions::default().compression(fjall::CompressionType::None),
@@ -185,28 +188,57 @@ impl Db {
             inner: ks,
             event_broadcaster: broadcast::channel(1000).0,
             eps: Rate::new(Duration::from_secs(1)),
+            shutting_down: AtomicBool::new(false),
             min_block_size: 512,
             max_block_size: 500_000,
             max_last_activity: Duration::from_secs(10),
         })
     }
 
+    pub fn shutdown(&self) -> AppResult<()> {
+        self.shutting_down.store(true, AtomicOrdering::Release);
+        self.sync(true)
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(AtomicOrdering::Acquire)
+    }
+
     pub fn sync(&self, all: bool) -> AppResult<()> {
+        let mut execs = Vec::with_capacity(self.hits.len());
         let _guard = scc::ebr::Guard::new();
         for (nsid, tree) in self.hits.iter(&_guard) {
             let count = tree.item_count();
             let is_max_block_size = count > self.min_block_size.max(tree.suggested_block_size());
             let is_too_old = tree.last_insert().elapsed() > self.max_last_activity;
             if count > 0 && (all || is_max_block_size || is_too_old) {
-                loop {
-                    let synced = tree.sync(self.max_block_size)?;
-                    if synced == 0 {
-                        break;
+                let nsid = nsid.clone();
+                let tree = tree.clone();
+                let max_block_size = self.max_block_size;
+                execs.push(move || {
+                    loop {
+                        let synced = match tree.sync(max_block_size) {
+                            Ok(synced) => synced,
+                            Err(err) => {
+                                tracing::error!("failed to sync {nsid}: {err}");
+                                break;
+                            }
+                        };
+                        if synced == 0 {
+                            break;
+                        }
+                        tracing::info!("synced {synced} of {nsid} to db");
                     }
-                    tracing::info!("synced {synced} of {nsid} to db");
-                }
+                });
             }
         }
+        drop(_guard);
+
+        for exec in execs {
+            self.syncpool.execute(exec);
+        }
+        self.syncpool.join();
+
         Ok(())
     }
 

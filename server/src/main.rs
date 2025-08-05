@@ -99,11 +99,14 @@ async fn main() {
         let db = db.clone();
         move || {
             loop {
+                if db.is_shutting_down() {
+                    break;
+                }
                 match db.sync(false) {
                     Ok(_) => (),
                     Err(e) => tracing::error!("failed to sync db: {}", e),
                 }
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                std::thread::sleep(std::time::Duration::from_secs(10));
             }
         }
     });
@@ -129,7 +132,7 @@ async fn main() {
     }
 
     tracing::info!("shutting down...");
-    db.sync(true).expect("couldnt sync db");
+    db.shutdown().expect("couldnt shutdown db");
 }
 
 fn debug() {
