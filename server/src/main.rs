@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     api::serve,
-    db::{Db, EventRecord},
+    db::{Db, DbOld, EventRecord},
     error::AppError,
     jetstream::JetstreamClient,
 };
@@ -18,6 +18,7 @@ mod api;
 mod db;
 mod error;
 mod jetstream;
+mod utils;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -34,12 +35,16 @@ async fn main() {
         .compact()
         .init();
 
-    if std::env::args()
-        .nth(1)
-        .map_or(false, |arg| arg == "migrate")
-    {
-        migrate_to_miniz();
-        return;
+    match std::env::args().nth(1).as_deref() {
+        Some("migrate") => {
+            migrate();
+            return;
+        }
+        Some("debug") => {
+            debug();
+            return;
+        }
+        _ => {}
     }
 
     let db = Arc::new(Db::new(".fjall_data").expect("couldnt create db"));
@@ -58,10 +63,10 @@ async fn main() {
         };
 
     let cancel_token = CancellationToken::new();
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1000);
 
     let consume_events = tokio::spawn({
         let consume_cancel = cancel_token.child_token();
+        let db = db.clone();
         async move {
             jetstream.connect().await?;
             loop {
@@ -71,7 +76,12 @@ async fn main() {
                             let Some(record) = EventRecord::from_jetstream(event) else {
                                 continue;
                             };
-                            let _ = event_tx.send(record).await;
+                            let db = db.clone();
+                            tokio::task::spawn_blocking(move || {
+                                if let Err(err) = db.record_event(record) {
+                                    tracing::error!("failed to record event: {}", err);
+                                }
+                            });
                         }
                         Err(err) => return Err(err),
                     },
@@ -81,20 +91,21 @@ async fn main() {
         }
     });
 
-    let ingest_events = std::thread::spawn({
+    std::thread::spawn({
         let db = db.clone();
         move || {
-            tracing::info!("starting ingest events thread...");
-            while let Some(e) = event_rx.blocking_recv() {
-                if let Err(e) = db.record_event(e) {
-                    tracing::error!("failed to record event: {}", e);
+            loop {
+                match db.sync(false) {
+                    Ok(_) => (),
+                    Err(e) => tracing::error!("failed to sync db: {}", e),
                 }
+                std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
     });
 
     tokio::select! {
-        res = serve(db, cancel_token.child_token()) => {
+        res = serve(db.clone(), cancel_token.child_token()) => {
             if let Err(e) = res {
                 tracing::error!("serve failed: {}", e);
             }
@@ -114,14 +125,23 @@ async fn main() {
     }
 
     tracing::info!("shutting down...");
-    ingest_events
-        .join()
-        .expect("failed to join ingest events thread");
+    db.sync(true).expect("couldnt sync db");
 }
 
-fn migrate_to_miniz() {
-    let from = Db::new(".fjall_data").expect("couldnt create db");
-    let to = Db::new(".fjall_data_miniz").expect("couldnt create db");
+fn debug() {
+    let db = Db::new(".fjall_data").expect("couldnt create db");
+    for nsid in db.get_nsids() {
+        let nsid = nsid.deref();
+        for hit in db.get_hits(nsid, ..) {
+            let hit = hit.expect("cant read event");
+            println!("{nsid} {}", hit.timestamp);
+        }
+    }
+}
+
+fn migrate() {
+    let from = DbOld::new(".fjall_data").expect("couldnt create db");
+    let to = Db::new(".fjall_data_migrated").expect("couldnt create db");
 
     let mut total_count = 0_u64;
     for nsid in from.get_nsids() {

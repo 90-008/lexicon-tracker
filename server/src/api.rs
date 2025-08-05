@@ -30,6 +30,7 @@ use tracing::{Instrument, Span, field};
 use crate::{
     db::Db,
     error::{AppError, AppResult},
+    utils::time_now,
 };
 
 struct LatencyMillis(u128);
@@ -161,22 +162,18 @@ async fn hits(
     let maybe_hits = db
         .get_hits(
             &params.nsid,
-            params.to.unwrap_or(0)
-                ..params.from.unwrap_or(
-                    std::time::SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("oops")
-                        .as_micros() as u64,
-                ),
-        )?
+            params.to.unwrap_or(0)..params.from.unwrap_or(time_now()),
+        )
         .take(MAX_HITS);
     let mut hits = Vec::with_capacity(maybe_hits.size_hint().0);
 
     for maybe_hit in maybe_hits {
-        let (timestamp, hit) = maybe_hit?;
+        let hit = maybe_hit?;
+        let hit_data = hit.access();
+
         hits.push(Hit {
-            timestamp,
-            deleted: hit.deleted,
+            timestamp: hit.timestamp,
+            deleted: hit_data.deleted,
         });
     }
 
