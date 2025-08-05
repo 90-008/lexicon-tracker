@@ -10,6 +10,7 @@ use crate::{
     db::{Db, EventRecord},
     error::AppError,
     jetstream::JetstreamClient,
+    utils::CLOCK,
 };
 
 mod api;
@@ -147,8 +148,10 @@ fn compact() {
     let from = Arc::new(Db::new(".fjall_data_from").expect("couldnt create db"));
     let to = Arc::new(Db::new(".fjall_data_to").expect("couldnt create db"));
 
-    let mut threads = Vec::new();
-    for nsid in from.get_nsids() {
+    let nsids = from.get_nsids().collect::<Vec<_>>();
+    let mut threads = Vec::with_capacity(nsids.len());
+    let start = CLOCK.now();
+    for nsid in nsids {
         let from = from.clone();
         let to = to.clone();
         threads.push(std::thread::spawn(move || {
@@ -168,11 +171,17 @@ fn compact() {
             count
         }));
     }
-
     let mut total_count = 0_u64;
     for thread in threads {
-        total_count += thread.join().expect("thread panicked");
+        let count = thread.join().expect("thread panicked");
+        total_count += count;
     }
+    let read_time = start.elapsed();
+    let read_per_second = total_count as f64 / read_time.as_secs_f64();
     to.sync(true).expect("cant sync");
-    tracing::info!("migrated {total_count} events!");
+    let total_time = start.elapsed();
+    let write_per_second = total_count as f64 / (total_time - read_time).as_secs_f64();
+    tracing::info!(
+        "migrated {total_count} events in {total_time:?} ({read_per_second:.2} rps, {write_per_second:.2} wps)"
+    );
 }
