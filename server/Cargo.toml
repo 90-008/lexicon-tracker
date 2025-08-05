@@ -26,6 +26,4 @@ scc = "2.3.4"
 atomic-time = "0.1.5"
 ordered-varint = "2.0.0"
 threadpool = "1.8.1"
-
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
+snmalloc-rs = "0.3.8"

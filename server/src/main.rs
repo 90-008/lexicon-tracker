@@ -1,8 +1,6 @@
 use std::{ops::Deref, sync::Arc};
 
 use smol_str::ToSmolStr;
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
 use tokio_util::sync::CancellationToken;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
@@ -20,9 +18,8 @@ mod error;
 mod jetstream;
 mod utils;
 
-#[cfg(not(target_env = "msvc"))]
 #[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 #[tokio::main]
 async fn main() {
