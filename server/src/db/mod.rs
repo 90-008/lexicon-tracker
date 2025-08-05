@@ -1,5 +1,6 @@
 use std::{
-    io::Cursor,
+    io::{self, Cursor, Write},
+    marker::PhantomData,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
     sync::{
@@ -9,12 +10,14 @@ use std::{
     time::Duration,
 };
 
+use byteview::ByteView;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
 use itertools::{Either, Itertools};
 use ordered_varint::Variable;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
 use tokio::sync::broadcast;
+use tokio_util::bytes::{self, BufMut};
 
 use crate::{
     db::block::{ReadVariableExt, WriteVariableExt},
@@ -69,8 +72,60 @@ impl EventRecord {
 }
 
 type ItemDecoder = block::ItemDecoder<Cursor<Slice>, NsidHit>;
-type ItemEncoder = block::ItemEncoder<Vec<u8>, NsidHit>;
+type ItemEncoder = block::ItemEncoder<WritableByteView, NsidHit>;
 type Item = block::Item<NsidHit>;
+
+struct WritableByteView {
+    view: ByteView,
+    written: usize,
+}
+
+impl WritableByteView {
+    // returns None if the view already has a reference to it
+    fn with_size(capacity: usize) -> Self {
+        Self {
+            view: ByteView::with_size(capacity),
+            written: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn into_inner(self) -> ByteView {
+        self.view
+    }
+}
+
+impl Write for WritableByteView {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let len = buf.len();
+        if len > self.view.len() - self.written {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "buffer full",
+            ));
+        }
+        // SAFETY: this is safe because we have checked that the buffer is not full
+        // SAFETY: we own the mutator so no other references to the view exist
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                buf.as_ptr(),
+                self.view
+                    .get_mut()
+                    .unwrap_unchecked()
+                    .as_mut_ptr()
+                    .add(self.written),
+                len,
+            );
+            self.written += len;
+        }
+        Ok(len)
+    }
+
+    #[inline(always)]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 pub struct LexiconHandle {
     tree: Partition,
@@ -113,9 +168,9 @@ impl LexiconHandle {
     }
 
     fn sync(&self, max_block_size: usize) -> AppResult<usize> {
-        let mut writer = ItemEncoder::new(Vec::with_capacity(
-            size_of::<u64>() + self.item_count().min(max_block_size) * size_of::<(u64, NsidHit)>(),
-        ));
+        let buf_size =
+            size_of::<u64>() + self.item_count().min(max_block_size) * size_of::<(u64, NsidHit)>();
+        let mut writer = ItemEncoder::new(WritableByteView::with_size(buf_size));
         let mut start_timestamp = None;
         let mut end_timestamp = None;
         let mut written = 0_usize;
@@ -142,7 +197,7 @@ impl LexiconHandle {
             let mut key = Vec::with_capacity(size_of::<u64>() * 2);
             key.write_varint(start_timestamp)?;
             key.write_varint(end_timestamp)?;
-            self.tree.insert(key, value)?;
+            self.tree.insert(key, value.into_inner())?;
         }
         Ok(written)
     }
@@ -384,10 +439,11 @@ impl Db {
             let map_block = move |(key, val)| {
                 let mut key_reader = Cursor::new(key);
                 let start_timestamp = key_reader.read_varint::<u64>()?;
-                let items =
-                    ItemDecoder::new(Cursor::new(val), start_timestamp)?.take_while(move |item| {
+                let items = ItemDecoder::new(Cursor::new(val), start_timestamp)?
+                    .take_while(move |item| {
                         item.as_ref().map_or(true, |item| item.timestamp <= limit)
-                    });
+                    })
+                    .map(|res| res.map_err(AppError::from));
                 Ok(items)
             };
 

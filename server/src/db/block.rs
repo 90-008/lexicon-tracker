@@ -49,7 +49,7 @@ impl<W: Write, T> ItemEncoder<W, T> {
         }
     }
 
-    pub fn encode(&mut self, item: &Item<T>) -> AppResult<()> {
+    pub fn encode(&mut self, item: &Item<T>) -> io::Result<()> {
         if self.prev_timestamp == 0 {
             // self.writer.write_varint(item.timestamp)?;
             self.prev_timestamp = item.timestamp;
@@ -68,13 +68,13 @@ impl<W: Write, T> ItemEncoder<W, T> {
         Ok(())
     }
 
-    fn write_data(&mut self, data: &[u8]) -> AppResult<()> {
+    fn write_data(&mut self, data: &[u8]) -> io::Result<()> {
         self.writer.write_varint(data.len())?;
         self.writer.write_all(data)?;
         Ok(())
     }
 
-    pub fn finish(mut self) -> AppResult<W> {
+    pub fn finish(mut self) -> io::Result<W> {
         self.writer.flush()?;
         Ok(self.writer)
     }
@@ -89,7 +89,7 @@ pub struct ItemDecoder<R, T> {
 }
 
 impl<R: Read, T: Archive> ItemDecoder<R, T> {
-    pub fn new(reader: R, start_timestamp: u64) -> AppResult<Self> {
+    pub fn new(reader: R, start_timestamp: u64) -> io::Result<Self> {
         Ok(ItemDecoder {
             reader,
             current_timestamp: start_timestamp,
@@ -99,7 +99,7 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
         })
     }
 
-    pub fn decode(&mut self) -> AppResult<Option<Item<T>>> {
+    pub fn decode(&mut self) -> io::Result<Option<Item<T>>> {
         if self.first_item {
             // read the first timestamp
             // let timestamp = match self.reader.read_varint::<u64>() {
@@ -144,7 +144,7 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
     }
 
     // [10, 11, 12, 14] -> [1, 1, 2] -> [0, 1]
-    fn read_timestamp(&mut self) -> AppResult<Option<u64>> {
+    fn read_timestamp(&mut self) -> io::Result<Option<u64>> {
         let delta = match self.reader.read_varint::<i64>() {
             Ok(delta) => delta,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -156,7 +156,7 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
         Ok(Some(self.current_timestamp))
     }
 
-    fn read_item(&mut self) -> AppResult<Option<AlignedVec>> {
+    fn read_item(&mut self) -> io::Result<Option<AlignedVec>> {
         let data_len = match self.reader.read_varint::<usize>() {
             Ok(data_len) => data_len,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -172,7 +172,7 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
 }
 
 impl<R: Read, T: Archive> Iterator for ItemDecoder<R, T> {
-    type Item = AppResult<Item<T>>;
+    type Item = io::Result<Item<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.decode().transpose()
