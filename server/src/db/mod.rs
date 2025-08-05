@@ -10,6 +10,7 @@ use std::{
 };
 
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
+use itertools::Itertools;
 use ordered_varint::Variable;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
@@ -269,47 +270,57 @@ impl Db {
     #[inline(always)]
     fn run_in_nsid_tree<T>(
         &self,
-        nsid: SmolStr,
+        nsid: &SmolStr,
         f: impl FnOnce(&LexiconHandle) -> AppResult<T>,
     ) -> AppResult<T> {
         f(self
             .hits
             .entry(nsid.clone())
-            .or_insert_with(move || Arc::new(LexiconHandle::new(&self.inner, &nsid)))
+            .or_insert_with(|| Arc::new(LexiconHandle::new(&self.inner, &nsid)))
             .get())
     }
 
-    pub fn record_event(&self, e: EventRecord) -> AppResult<()> {
-        let EventRecord {
-            nsid,
-            timestamp,
-            deleted,
-        } = e.clone();
+    pub fn ingest_events(&self, events: impl Iterator<Item = EventRecord>) -> AppResult<()> {
+        for (key, chunk) in events.chunk_by(|event| event.nsid.clone()).into_iter() {
+            let mut counts = self.get_count(&key)?;
+            self.run_in_nsid_tree(&key, move |tree| {
+                for event in chunk {
+                    let EventRecord {
+                        timestamp, deleted, ..
+                    } = event.clone();
 
-        // insert event
-        self.run_in_nsid_tree(nsid.clone(), move |tree| Ok(tree.insert(e)))?;
-        // increment count
-        let mut counts = self.get_count(&nsid)?;
-        counts.last_seen = timestamp;
-        if deleted {
-            counts.deleted_count += 1;
-        } else {
-            counts.count += 1;
+                    tree.insert(event);
+
+                    // increment count
+                    counts.last_seen = timestamp;
+                    if deleted {
+                        counts.deleted_count += 1;
+                    } else {
+                        counts.count += 1;
+                    }
+
+                    self.eps.observe();
+                }
+                Ok(())
+            })?;
+            self.insert_count(&key, &counts)?;
+            if self.event_broadcaster.receiver_count() > 0 {
+                let _ = self.event_broadcaster.send((key, counts));
+            }
         }
-        self.insert_count(&nsid, counts.clone())?;
-        if self.event_broadcaster.receiver_count() > 0 {
-            let _ = self.event_broadcaster.send((SmolStr::new(&nsid), counts));
-        }
-        self.eps.observe();
         Ok(())
     }
 
+    pub fn record_event(&self, e: EventRecord) -> AppResult<()> {
+        self.ingest_events(std::iter::once(e))
+    }
+
     #[inline(always)]
-    fn insert_count(&self, nsid: &str, counts: NsidCounts) -> AppResult<()> {
+    fn insert_count(&self, nsid: &str, counts: &NsidCounts) -> AppResult<()> {
         self.counts
             .insert(
                 nsid,
-                unsafe { rkyv::to_bytes::<Error>(&counts).unwrap_unchecked() }.as_slice(),
+                unsafe { rkyv::to_bytes::<Error>(counts).unwrap_unchecked() }.as_slice(),
             )
             .map_err(AppError::from)
     }
