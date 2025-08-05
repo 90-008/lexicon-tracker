@@ -92,7 +92,7 @@ async fn main() {
         }
     });
 
-    let sync_thread = std::thread::spawn({
+    std::thread::spawn({
         let db = db.clone();
         move || {
             loop {

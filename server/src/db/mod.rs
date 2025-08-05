@@ -4,7 +4,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant},
 };
@@ -12,7 +12,6 @@ use std::{
 use atomic_time::AtomicInstant;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
 use ordered_varint::Variable;
-use pingora_limits::rate::Rate;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
 use tokio::sync::broadcast;
@@ -21,7 +20,7 @@ use crate::{
     db::block::{ReadVariableExt, WriteVariableExt},
     error::{AppError, AppResult},
     jetstream::JetstreamEvent,
-    utils::{DefaultRateTracker, RateTracker},
+    utils::{CLOCK, DefaultRateTracker, RateTracker},
 };
 
 mod block;
@@ -77,8 +76,8 @@ pub struct LexiconHandle {
     tree: Partition,
     buf: Arc<scc::Queue<EventRecord>>,
     // this is stored here since scc::Queue does not have O(1) length
-    buf_len: AtomicUsize,       // relaxed
-    last_insert: AtomicInstant, // relaxed
+    buf_len: AtomicUsize,   // relaxed
+    last_insert: AtomicU64, // relaxed
     eps: DefaultRateTracker,
 }
 
@@ -89,7 +88,7 @@ impl LexiconHandle {
             tree: keyspace.open_partition(nsid, opts).unwrap(),
             buf: Default::default(),
             buf_len: AtomicUsize::new(0),
-            last_insert: AtomicInstant::now(),
+            last_insert: AtomicU64::new(0),
             eps: RateTracker::new(Duration::from_secs(10)),
         }
     }
@@ -98,8 +97,8 @@ impl LexiconHandle {
         self.buf_len.load(AtomicOrdering::Relaxed)
     }
 
-    fn last_insert(&self) -> Instant {
-        self.last_insert.load(AtomicOrdering::Relaxed)
+    fn since_last_activity(&self) -> u64 {
+        CLOCK.delta_as_nanos(self.last_insert.load(AtomicOrdering::Relaxed), CLOCK.raw())
     }
 
     fn suggested_block_size(&self) -> usize {
@@ -109,8 +108,7 @@ impl LexiconHandle {
     fn insert(&self, event: EventRecord) {
         self.buf.push(event);
         self.buf_len.fetch_add(1, AtomicOrdering::Relaxed);
-        self.last_insert
-            .store(Instant::now(), AtomicOrdering::Relaxed);
+        self.last_insert.store(CLOCK.raw(), AtomicOrdering::Relaxed);
         self.eps.observe();
     }
 
@@ -164,7 +162,7 @@ pub struct Db {
     shutting_down: AtomicBool,
     min_block_size: usize,
     max_block_size: usize,
-    max_last_activity: Duration,
+    max_last_activity: u64,
 }
 
 impl Db {
@@ -186,7 +184,7 @@ impl Db {
             shutting_down: AtomicBool::new(false),
             min_block_size: 512,
             max_block_size: 500_000,
-            max_last_activity: Duration::from_secs(10),
+            max_last_activity: Duration::from_secs(10).as_nanos() as u64,
         })
     }
 
@@ -205,7 +203,7 @@ impl Db {
         for (nsid, tree) in self.hits.iter(&_guard) {
             let count = tree.item_count();
             let is_max_block_size = count > self.min_block_size.max(tree.suggested_block_size());
-            let is_too_old = tree.last_insert().elapsed() > self.max_last_activity;
+            let is_too_old = tree.since_last_activity() > self.max_last_activity;
             if count > 0 && (all || is_max_block_size || is_too_old) {
                 let nsid = nsid.clone();
                 let tree = tree.clone();
