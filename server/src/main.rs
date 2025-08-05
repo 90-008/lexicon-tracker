@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     api::serve,
-    db::{Db, DbOld, EventRecord},
+    db::{Db, EventRecord},
     error::AppError,
     jetstream::JetstreamClient,
 };
@@ -36,8 +36,8 @@ async fn main() {
         .init();
 
     match std::env::args().nth(1).as_deref() {
-        Some("migrate") => {
-            migrate();
+        Some("compact") => {
+            compact();
             return;
         }
         Some("debug") => {
@@ -143,9 +143,9 @@ fn debug() {
     }
 }
 
-fn migrate() {
-    let from = Arc::new(DbOld::new(".fjall_data").expect("couldnt create db"));
-    let to = Arc::new(Db::new(".fjall_data_migrated").expect("couldnt create db"));
+fn compact() {
+    let from = Arc::new(Db::new(".fjall_data_from").expect("couldnt create db"));
+    let to = Arc::new(Db::new(".fjall_data_to").expect("couldnt create db"));
 
     let mut threads = Vec::new();
     for nsid in from.get_nsids() {
@@ -155,10 +155,11 @@ fn migrate() {
             tracing::info!("migrating {} ...", nsid.deref());
             let mut count = 0_u64;
             for hit in from.get_hits(&nsid, ..) {
-                let (timestamp, data) = hit.expect("cant read event");
+                let hit = hit.expect("cant read event");
+                let data = hit.access();
                 to.record_event(EventRecord {
                     nsid: nsid.to_smolstr(),
-                    timestamp,
+                    timestamp: hit.timestamp,
                     deleted: data.deleted,
                 })
                 .expect("cant record event");
