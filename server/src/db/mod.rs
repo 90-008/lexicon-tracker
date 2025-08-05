@@ -309,12 +309,13 @@ impl LexiconHandle {
         }
     }
 
-    fn sync(&self) -> AppResult<()> {
+    fn sync(&self, max_block_size: usize) -> AppResult<usize> {
         let mut writer = ItemEncoder::new(Vec::with_capacity(
-            size_of::<u64>() + self.item_count() * size_of::<(u64, NsidHit)>(),
+            size_of::<u64>() + self.item_count().min(max_block_size) * size_of::<(u64, NsidHit)>(),
         ));
         let mut start_timestamp = None;
         let mut end_timestamp = None;
+        let mut written = 0_usize;
         while let Some(event) = self.buf.pop() {
             let item = Item::new(
                 event.timestamp,
@@ -327,6 +328,10 @@ impl LexiconHandle {
                 start_timestamp = Some(event.timestamp);
             }
             end_timestamp = Some(event.timestamp);
+            if written >= max_block_size {
+                break;
+            }
+            written += 1;
         }
         if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
             self.buf_len.store(0, AtomicOrdering::Release);
@@ -336,7 +341,7 @@ impl LexiconHandle {
             key.write_varint(end_timestamp)?;
             self.tree.insert(key, value)?;
         }
-        Ok(())
+        Ok(written)
     }
 }
 
@@ -351,6 +356,7 @@ pub struct Db {
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: Rate,
     min_block_size: usize,
+    max_block_size: usize,
     max_last_activity: Duration,
 }
 
@@ -370,6 +376,7 @@ impl Db {
             event_broadcaster: broadcast::channel(1000).0,
             eps: Rate::new(Duration::from_secs(1)),
             min_block_size: 512,
+            max_block_size: 100_000,
             max_last_activity: Duration::from_secs(10),
         })
     }
@@ -381,8 +388,13 @@ impl Db {
             let is_max_block_size = count > self.min_block_size.max(tree.suggested_block_size());
             let is_too_old = tree.last_insert().elapsed() > self.max_last_activity;
             if count > 0 && (all || is_max_block_size || is_too_old) {
-                tracing::info!("syncing {count} of {nsid} to db");
-                tree.sync()?;
+                loop {
+                    let synced = tree.sync(self.max_block_size)?;
+                    if synced == 0 {
+                        break;
+                    }
+                    tracing::info!("synced {synced} of {nsid} to db");
+                }
             }
         }
         Ok(())
