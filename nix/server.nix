@@ -1,12 +1,15 @@
 {
-rustPlatform,
-...
+  rustPlatform,
+  cmake,
+  ...
 }:
 rustPlatform.buildRustPackage {
   pname = "nsid-tracker-server";
   version = "main";
 
   src = ../server;
+
+  nativeBuildInputs = [ cmake ];
 
   cargoLock = {
     lockFile = ../server/Cargo.lock;
