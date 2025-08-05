@@ -6,10 +6,9 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use atomic_time::AtomicInstant;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
 use ordered_varint::Variable;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
