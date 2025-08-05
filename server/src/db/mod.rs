@@ -216,7 +216,7 @@ impl DbOld {
         })
     }
 
-    pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str>> {
+    pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str> + 'static> {
         self.inner
             .list_partitions()
             .into_iter()
@@ -498,7 +498,7 @@ impl Db {
         })
     }
 
-    pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str>> {
+    pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str> + 'static> {
         self.inner
             .list_partitions()
             .into_iter()

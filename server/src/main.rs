@@ -144,24 +144,34 @@ fn debug() {
 }
 
 fn migrate() {
-    let from = DbOld::new(".fjall_data").expect("couldnt create db");
-    let to = Db::new(".fjall_data_migrated").expect("couldnt create db");
+    let from = Arc::new(DbOld::new(".fjall_data").expect("couldnt create db"));
+    let to = Arc::new(Db::new(".fjall_data_migrated").expect("couldnt create db"));
 
-    let mut total_count = 0_u64;
+    let mut threads = Vec::new();
     for nsid in from.get_nsids() {
-        tracing::info!("migrating {} ...", nsid.deref());
-        for hit in from.get_hits(&nsid, ..) {
-            let (timestamp, data) = hit.expect("cant read event");
-            to.record_event(EventRecord {
-                nsid: nsid.to_smolstr(),
-                timestamp,
-                deleted: data.deleted,
-            })
-            .expect("cant record event");
-            total_count += 1;
-        }
+        let from = from.clone();
+        let to = to.clone();
+        threads.push(std::thread::spawn(move || {
+            tracing::info!("migrating {} ...", nsid.deref());
+            let mut count = 0_u64;
+            for hit in from.get_hits(&nsid, ..) {
+                let (timestamp, data) = hit.expect("cant read event");
+                to.record_event(EventRecord {
+                    nsid: nsid.to_smolstr(),
+                    timestamp,
+                    deleted: data.deleted,
+                })
+                .expect("cant record event");
+                count += 1;
+            }
+            count
+        }));
     }
 
+    let mut total_count = 0_u64;
+    for thread in threads {
+        total_count += thread.join().expect("thread panicked");
+    }
     to.sync(true).expect("cant sync");
     tracing::info!("migrated {total_count} events!");
 }
