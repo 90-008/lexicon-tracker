@@ -15,7 +15,6 @@ tokio-websockets = { version = "0.12", features = ["client", "rustls-platform-ve
 futures-util = "0.3"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "tracing", "json", "query"] }
 axum-tws = { git = "https://github.com/90-008/axum-tws.git", features = ["http2"] }
-pingora-limits = "0.5"
 tower-http = {version = "0.6", features = ["request-id", "trace", "compression-full"]}
 fjall = { version = "2", default-features = false, features = ["miniz", "lz4"] }
 rkyv = {version = "0.8", features = ["unaligned"]}
@@ -27,3 +26,4 @@ atomic-time = "0.1.5"
 ordered-varint = "2.0.0"
 threadpool = "1.8.1"
 snmalloc-rs = "0.3.8"
+quanta = "0.12.6"

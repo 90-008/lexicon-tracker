@@ -2,9 +2,9 @@ use std::{
     collections::HashMap,
     fmt::Display,
     net::SocketAddr,
-    ops::Deref,
+    ops::{Bound, Deref, RangeBounds},
     sync::Arc,
-    time::{Duration, UNIX_EPOCH},
+    time::Duration,
 };
 
 use anyhow::anyhow;
@@ -30,7 +30,6 @@ use tracing::{Instrument, Span, field};
 use crate::{
     db::Db,
     error::{AppError, AppResult},
-    utils::time_now,
 };
 
 struct LatencyMillis(u128);
@@ -155,15 +154,30 @@ struct Hit {
 
 const MAX_HITS: usize = 100_000;
 
+#[derive(Debug)]
+struct HitsRange {
+    from: Bound<u64>,
+    to: Bound<u64>,
+}
+
+impl RangeBounds<u64> for HitsRange {
+    fn start_bound(&self) -> Bound<&u64> {
+        self.from.as_ref()
+    }
+
+    fn end_bound(&self) -> Bound<&u64> {
+        self.to.as_ref()
+    }
+}
+
 async fn hits(
     State(db): State<Arc<Db>>,
     Query(params): Query<HitsQuery>,
 ) -> AppResult<Json<Vec<Hit>>> {
+    let from = params.to.map(Bound::Included).unwrap_or(Bound::Unbounded);
+    let to = params.from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let maybe_hits = db
-        .get_hits(
-            &params.nsid,
-            params.to.unwrap_or(0)..params.from.unwrap_or(time_now()),
-        )
+        .get_hits(&params.nsid, HitsRange { from, to })
         .take(MAX_HITS);
     let mut hits = Vec::with_capacity(maybe_hits.size_hint().0);
 

@@ -21,7 +21,7 @@ use crate::{
     db::block::{ReadVariableExt, WriteVariableExt},
     error::{AppError, AppResult},
     jetstream::JetstreamEvent,
-    utils::time_now,
+    utils::{DefaultRateTracker, RateTracker},
 };
 
 mod block;
@@ -76,10 +76,10 @@ type Item = block::Item<NsidHit>;
 pub struct LexiconHandle {
     tree: Partition,
     buf: Arc<scc::Queue<EventRecord>>,
+    // this is stored here since scc::Queue does not have O(1) length
     buf_len: AtomicUsize,       // relaxed
     last_insert: AtomicInstant, // relaxed
-    block_size: AtomicUsize,    // relaxed
-    eps: Rate,
+    eps: DefaultRateTracker,
 }
 
 impl LexiconHandle {
@@ -90,8 +90,7 @@ impl LexiconHandle {
             buf: Default::default(),
             buf_len: AtomicUsize::new(0),
             last_insert: AtomicInstant::now(),
-            eps: Rate::new(Duration::from_secs(5)),
-            block_size: AtomicUsize::new(1000),
+            eps: RateTracker::new(Duration::from_secs(10)),
         }
     }
 
@@ -104,7 +103,7 @@ impl LexiconHandle {
     }
 
     fn suggested_block_size(&self) -> usize {
-        self.block_size.load(AtomicOrdering::Relaxed)
+        self.eps.rate() as usize * 60
     }
 
     fn insert(&self, event: EventRecord) {
@@ -112,11 +111,7 @@ impl LexiconHandle {
         self.buf_len.fetch_add(1, AtomicOrdering::Relaxed);
         self.last_insert
             .store(Instant::now(), AtomicOrdering::Relaxed);
-        self.eps.observe(&(), 1);
-        let rate = self.eps.rate(&()) as usize;
-        if rate != 0 {
-            self.block_size.store(rate * 60, AtomicOrdering::Relaxed);
-        }
+        self.eps.observe();
     }
 
     fn sync(&self, max_block_size: usize) -> AppResult<usize> {
@@ -165,7 +160,7 @@ pub struct Db {
     hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
     syncpool: threadpool::ThreadPool,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
-    eps: Rate,
+    eps: RateTracker<100>,
     shutting_down: AtomicBool,
     min_block_size: usize,
     max_block_size: usize,
@@ -187,7 +182,7 @@ impl Db {
             )?,
             inner: ks,
             event_broadcaster: broadcast::channel(1000).0,
-            eps: Rate::new(Duration::from_secs(1)),
+            eps: RateTracker::new(Duration::from_secs(1)),
             shutting_down: AtomicBool::new(false),
             min_block_size: 512,
             max_block_size: 500_000,
@@ -244,7 +239,7 @@ impl Db {
 
     #[inline(always)]
     pub fn eps(&self) -> usize {
-        self.eps.rate(&()) as usize
+        self.eps.rate() as usize
     }
 
     #[inline(always)]
@@ -308,7 +303,7 @@ impl Db {
         if self.event_broadcaster.receiver_count() > 0 {
             let _ = self.event_broadcaster.send((SmolStr::new(&nsid), counts));
         }
-        self.eps.observe(&(), 1);
+        self.eps.observe();
         Ok(())
     }
 
