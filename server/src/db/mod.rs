@@ -1,11 +1,10 @@
 use std::{
-    io::{self, Cursor, Write},
-    marker::PhantomData,
+    io::{Cursor, Write},
     ops::{Bound, Deref, RangeBounds},
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     },
     time::Duration,
 };
@@ -14,10 +13,11 @@ use byteview::ByteView;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
 use itertools::{Either, Itertools};
 use ordered_varint::Variable;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
 use tokio::sync::broadcast;
-use tokio_util::bytes::{self, BufMut};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     db::block::{ReadVariableExt, WriteVariableExt},
@@ -127,11 +127,18 @@ impl Write for WritableByteView {
     }
 }
 
+struct Block {
+    written: usize,
+    key: ByteView,
+    data: ByteView,
+}
+
 pub struct LexiconHandle {
     tree: Partition,
+    nsid: SmolStr,
     buf: Arc<scc::Queue<EventRecord>>,
     // this is stored here since scc::Queue does not have O(1) length
-    buf_len: AtomicUsize,   // relaxed
+    buf_len: AtomicUsize,   // seqcst
     last_insert: AtomicU64, // relaxed
     eps: DefaultRateTracker,
 }
@@ -141,6 +148,7 @@ impl LexiconHandle {
         let opts = PartitionCreateOptions::default().compression(fjall::CompressionType::Miniz(9));
         Self {
             tree: keyspace.open_partition(nsid, opts).unwrap(),
+            nsid: nsid.into(),
             buf: Default::default(),
             buf_len: AtomicUsize::new(0),
             last_insert: AtomicU64::new(0),
@@ -149,7 +157,7 @@ impl LexiconHandle {
     }
 
     fn item_count(&self) -> usize {
-        self.buf_len.load(AtomicOrdering::Relaxed)
+        self.buf_len.load(AtomicOrdering::SeqCst)
     }
 
     fn since_last_activity(&self) -> u64 {
@@ -162,12 +170,12 @@ impl LexiconHandle {
 
     fn insert(&self, event: EventRecord) {
         self.buf.push(event);
-        self.buf_len.fetch_add(1, AtomicOrdering::Relaxed);
+        self.buf_len.fetch_add(1, AtomicOrdering::SeqCst);
         self.last_insert.store(CLOCK.raw(), AtomicOrdering::Relaxed);
         self.eps.observe();
     }
 
-    fn sync(&self, max_block_size: usize) -> AppResult<usize> {
+    fn encode_block(&self, max_block_size: usize) -> AppResult<Option<Block>> {
         let buf_size =
             size_of::<u64>() + self.item_count().min(max_block_size) * size_of::<(u64, NsidHit)>();
         let mut writer = ItemEncoder::new(WritableByteView::with_size(buf_size));
@@ -192,14 +200,18 @@ impl LexiconHandle {
             written += 1;
         }
         if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
-            self.buf_len.store(0, AtomicOrdering::Relaxed);
+            self.buf_len.store(0, AtomicOrdering::SeqCst);
             let value = writer.finish()?;
-            let mut key = Vec::with_capacity(size_of::<u64>() * 2);
+            let mut key = WritableByteView::with_size(size_of::<u64>() * 2);
             key.write_varint(start_timestamp)?;
             key.write_varint(end_timestamp)?;
-            self.tree.insert(key, value.into_inner())?;
+            return Ok(Some(Block {
+                written,
+                key: key.into_inner(),
+                data: value.into_inner(),
+            }));
         }
-        Ok(written)
+        Ok(None)
     }
 }
 
@@ -209,24 +221,26 @@ pub struct Db {
     inner: Keyspace,
     counts: Partition,
     hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
-    syncpool: threadpool::ThreadPool,
+    sync_pool: threadpool::ThreadPool,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: RateTracker<100>,
-    shutting_down: AtomicBool,
+    cancel_token: CancellationToken,
     min_block_size: usize,
     max_block_size: usize,
     max_last_activity: u64,
 }
 
 impl Db {
-    pub fn new(path: impl AsRef<Path>) -> AppResult<Self> {
+    pub fn new(path: impl AsRef<Path>, cancel_token: CancellationToken) -> AppResult<Self> {
         tracing::info!("opening db...");
         let ks = Config::new(path)
             .cache_size(8 * 1024 * 1024) // from talna
             .open()?;
         Ok(Self {
             hits: Default::default(),
-            syncpool: threadpool::Builder::new().num_threads(256).build(),
+            sync_pool: threadpool::Builder::new()
+                .num_threads(rayon::current_num_threads() * 2)
+                .build(),
             counts: ks.open_partition(
                 "_counts",
                 PartitionCreateOptions::default().compression(fjall::CompressionType::None),
@@ -234,56 +248,70 @@ impl Db {
             inner: ks,
             event_broadcaster: broadcast::channel(1000).0,
             eps: RateTracker::new(Duration::from_secs(1)),
-            shutting_down: AtomicBool::new(false),
+            cancel_token,
             min_block_size: 512,
             max_block_size: 500_000,
             max_last_activity: Duration::from_secs(10).as_nanos() as u64,
         })
     }
 
-    pub fn shutdown(&self) -> AppResult<()> {
-        self.shutting_down.store(true, AtomicOrdering::Release);
-        self.sync(true)
+    pub fn shutting_down(&self) -> impl Future<Output = ()> {
+        self.cancel_token.cancelled()
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down.load(AtomicOrdering::Acquire)
+        self.cancel_token.is_cancelled()
     }
 
     pub fn sync(&self, all: bool) -> AppResult<()> {
-        let mut execs = Vec::with_capacity(self.hits.len());
+        // prepare all the data
+        let mut data = Vec::with_capacity(self.hits.len());
         let _guard = scc::ebr::Guard::new();
-        for (nsid, tree) in self.hits.iter(&_guard) {
-            let count = tree.item_count();
-            let is_max_block_size = count > self.min_block_size.max(tree.suggested_block_size());
-            let is_too_old = tree.since_last_activity() > self.max_last_activity;
-            if count > 0 && (all || is_max_block_size || is_too_old) {
-                let nsid = nsid.clone();
-                let tree = tree.clone();
-                let max_block_size = self.max_block_size;
-                execs.push(move || {
-                    loop {
-                        let synced = match tree.sync(max_block_size) {
-                            Ok(synced) => synced,
-                            Err(err) => {
-                                tracing::error!("failed to sync {nsid}: {err}");
-                                break;
-                            }
-                        };
-                        if synced == 0 {
-                            break;
-                        }
-                        tracing::info!("synced {synced} of {nsid} to db");
-                    }
-                });
+        for (_, handle) in self.hits.iter(&_guard) {
+            let block_size = self
+                .max_block_size
+                .min(self.min_block_size.max(handle.suggested_block_size()));
+            let count = handle.item_count();
+            let data_count = count / block_size;
+            let is_too_old = handle.since_last_activity() > self.max_last_activity;
+            if count > 0 && (all || data_count > 0 || is_too_old) {
+                for i in 0..data_count {
+                    data.push((i, handle.clone(), block_size));
+                }
+                // only sync remainder if we haven't met block size
+                let remainder = count % block_size;
+                if data_count == 0 && remainder > 0 {
+                    data.push((data_count, handle.clone(), remainder));
+                }
             }
         }
         drop(_guard);
 
-        for exec in execs {
-            self.syncpool.execute(exec);
+        // process the blocks
+        let mut blocks = Vec::with_capacity(data.len());
+        data.into_par_iter()
+            .map(|(i, handle, max_block_size)| {
+                handle
+                    .encode_block(max_block_size)
+                    .transpose()
+                    .map(|r| r.map(|block| (i, block, handle.clone())))
+            })
+            .collect_into_vec(&mut blocks);
+
+        // execute into db
+        for item in blocks.into_iter() {
+            let Some((i, block, handle)) = item.transpose()? else {
+                continue;
+            };
+            self.sync_pool
+                .execute(move || match handle.tree.insert(block.key, block.data) {
+                    Ok(_) => {
+                        tracing::info!("[{i}] synced {} of {} to db", block.written, handle.nsid)
+                    }
+                    Err(err) => tracing::error!("failed to sync block: {}", err),
+                });
         }
-        self.syncpool.join();
+        self.sync_pool.join();
 
         Ok(())
     }

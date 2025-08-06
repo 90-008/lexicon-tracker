@@ -9,9 +9,9 @@ pub static CLOCK: std::sync::LazyLock<quanta::Clock> =
 #[derive(Debug)]
 pub struct RateTracker<const BUCKET_WINDOW: u64> {
     buckets: Vec<AtomicU64>,
+    last_bucket_time: AtomicU64,
     bucket_duration_nanos: u64,
     window_duration: Duration,
-    last_bucket_time: AtomicU64,
     start_time: u64, // raw time when tracker was created
 }
 
@@ -39,19 +39,22 @@ impl<const BUCKET_WINDOW: u64> RateTracker<BUCKET_WINDOW> {
         }
     }
 
+    #[inline(always)]
+    fn elapsed(&self) -> u64 {
+        CLOCK.delta_as_nanos(self.start_time, CLOCK.raw())
+    }
+
     /// record an event
     pub fn observe(&self) {
-        let now = CLOCK.raw();
-        self.maybe_advance_buckets(now);
+        self.maybe_advance_buckets();
 
-        let bucket_index = self.get_current_bucket_index(now);
+        let bucket_index = self.get_current_bucket_index();
         self.buckets[bucket_index].fetch_add(1, Ordering::Relaxed);
     }
 
     /// get the current rate in events per second
     pub fn rate(&self) -> f64 {
-        let now = CLOCK.raw();
-        self.maybe_advance_buckets(now);
+        self.maybe_advance_buckets();
 
         let total_events: u64 = self
             .buckets
@@ -62,16 +65,14 @@ impl<const BUCKET_WINDOW: u64> RateTracker<BUCKET_WINDOW> {
         total_events as f64 / self.window_duration.as_secs_f64()
     }
 
-    fn get_current_bucket_index(&self, now: u64) -> usize {
-        let elapsed_nanos = CLOCK.delta_as_nanos(self.start_time, now);
-        let bucket_number = elapsed_nanos / self.bucket_duration_nanos;
+    fn get_current_bucket_index(&self) -> usize {
+        let bucket_number = self.elapsed() / self.bucket_duration_nanos;
         (bucket_number as usize) % self.buckets.len()
     }
 
-    fn maybe_advance_buckets(&self, now: u64) {
-        let elapsed_nanos = CLOCK.delta_as_nanos(self.start_time, now);
+    fn maybe_advance_buckets(&self) {
         let current_bucket_time =
-            (elapsed_nanos / self.bucket_duration_nanos) * self.bucket_duration_nanos;
+            (self.elapsed() / self.bucket_duration_nanos) * self.bucket_duration_nanos;
         let last_bucket_time = self.last_bucket_time.load(Ordering::Relaxed);
 
         if current_bucket_time > last_bucket_time {

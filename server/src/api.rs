@@ -146,7 +146,7 @@ struct HitsQuery {
     to: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct Hit {
     timestamp: u64,
     deleted: bool,

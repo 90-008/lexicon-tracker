@@ -8,8 +8,6 @@ use std::{
     marker::PhantomData,
 };
 
-use crate::error::AppResult;
-
 pub struct Item<T> {
     pub timestamp: u64,
     data: AlignedVec,

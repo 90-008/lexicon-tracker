@@ -49,7 +49,10 @@ async fn main() {
         None => {}
     }
 
-    let db = Arc::new(Db::new(".fjall_data").expect("couldnt create db"));
+    let cancel_token = CancellationToken::new();
+
+    let db =
+        Arc::new(Db::new(".fjall_data", cancel_token.child_token()).expect("couldnt create db"));
 
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -64,11 +67,9 @@ async fn main() {
             }
         };
 
-    let cancel_token = CancellationToken::new();
-
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1000);
     let consume_events = tokio::spawn({
         let consume_cancel = cancel_token.child_token();
-        let db = db.clone();
         async move {
             jetstream.connect().await?;
             loop {
@@ -78,12 +79,7 @@ async fn main() {
                             let Some(record) = EventRecord::from_jetstream(event) else {
                                 continue;
                             };
-                            let db = db.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Err(err) = db.record_event(record) {
-                                    tracing::error!("failed to record event: {}", err);
-                                }
-                            });
+                            event_tx.send(record).await?;
                         }
                         Err(err) => return Err(err),
                     },
@@ -93,18 +89,46 @@ async fn main() {
         }
     });
 
-    std::thread::spawn({
+    let ingest_events = std::thread::spawn({
         let db = db.clone();
         move || {
+            let mut buffer = Vec::new();
             loop {
-                if db.is_shutting_down() {
+                let read = event_rx.blocking_recv_many(&mut buffer, 100);
+                if let Err(err) = db.ingest_events(buffer.drain(..)) {
+                    tracing::error!("failed to ingest events: {}", err);
+                }
+                if read == 0 || db.is_shutting_down() {
                     break;
                 }
-                match db.sync(false) {
-                    Ok(_) => (),
-                    Err(e) => tracing::error!("failed to sync db: {}", e),
+            }
+        }
+    });
+
+    let sync_task = tokio::task::spawn({
+        let db = db.clone();
+        async move {
+            loop {
+                let sync_db = tokio::task::spawn_blocking({
+                    let db = db.clone();
+                    move || {
+                        if db.is_shutting_down() {
+                            return;
+                        }
+                        match db.sync(false) {
+                            Ok(_) => (),
+                            Err(e) => tracing::error!("failed to sync db: {}", e),
+                        }
+                    }
+                });
+                tokio::select! {
+                    _ = sync_db => {}
+                    _ = db.shutting_down() => break,
                 }
-                std::thread::sleep(std::time::Duration::from_secs(10));
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
+                    _ = db.shutting_down() => break,
+                }
             }
         }
     });
@@ -130,11 +154,14 @@ async fn main() {
     }
 
     tracing::info!("shutting down...");
-    db.shutdown().expect("couldnt shutdown db");
+    cancel_token.cancel();
+    ingest_events.join().expect("failed to join ingest events");
+    sync_task.await.expect("cant join sync task");
+    db.sync(true).expect("cant sync db");
 }
 
 fn debug() {
-    let db = Db::new(".fjall_data").expect("couldnt create db");
+    let db = Db::new(".fjall_data", CancellationToken::new()).expect("couldnt create db");
     for nsid in db.get_nsids() {
         let nsid = nsid.deref();
         for hit in db.get_hits(nsid, ..) {
@@ -145,8 +172,12 @@ fn debug() {
 }
 
 fn compact() {
-    let from = Arc::new(Db::new(".fjall_data_from").expect("couldnt create db"));
-    let to = Arc::new(Db::new(".fjall_data_to").expect("couldnt create db"));
+    let cancel_token = CancellationToken::new();
+    let from = Arc::new(
+        Db::new(".fjall_data_from", cancel_token.child_token()).expect("couldnt create db"),
+    );
+    let to =
+        Arc::new(Db::new(".fjall_data_to", cancel_token.child_token()).expect("couldnt create db"));
 
     let nsids = from.get_nsids().collect::<Vec<_>>();
     let mut threads = Vec::with_capacity(nsids.len());
