@@ -91,7 +91,12 @@ impl LexiconHandle {
         self.eps.observe();
     }
 
-    pub fn compact(&self, compact_to: usize, range: impl RangeBounds<u64>) -> AppResult<()> {
+    pub fn compact(
+        &self,
+        compact_to: usize,
+        range: impl RangeBounds<u64>,
+        sort: bool,
+    ) -> AppResult<()> {
         let start_limit = match range.start_bound().cloned() {
             Bound::Included(start) => start,
             Bound::Excluded(start) => start.saturating_add(1),
@@ -117,7 +122,7 @@ impl LexiconHandle {
 
         let start_blocks_size = blocks_to_compact.len();
         let keys_to_delete = blocks_to_compact.iter().map(|(key, _)| key);
-        let all_items =
+        let mut all_items =
             blocks_to_compact
                 .iter()
                 .try_fold(Vec::new(), |mut acc, (key, value)| {
@@ -128,6 +133,10 @@ impl LexiconHandle {
                     acc.append(&mut items);
                     AppResult::Ok(acc)
                 })?;
+
+        if sort {
+            all_items.sort_unstable_by_key(|e| e.timestamp);
+        }
 
         let new_blocks = all_items
             .into_iter()

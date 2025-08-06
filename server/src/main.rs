@@ -155,7 +155,7 @@ async fn main() {
                                 },
                                 "running compaction...",
                             );
-                            match db.compact_all(db.max_block_size, range) {
+                            match db.compact_all(db.max_block_size, range, false) {
                                 Ok(_) => (),
                                 Err(e) => tracing::error!("failed to compact db: {}", e),
                             }

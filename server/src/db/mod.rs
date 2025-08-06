@@ -207,26 +207,28 @@ impl Db {
         nsid: impl AsRef<str>,
         max_count: usize,
         range: impl RangeBounds<u64>,
+        sort: bool,
     ) -> AppResult<()> {
         let Some(handle) = self.get_handle(nsid) else {
             return Ok(());
         };
-        handle.compact(max_count, range)
+        handle.compact(max_count, range, sort)
     }
 
     pub fn compact_all(
         &self,
         max_count: usize,
         range: impl RangeBounds<u64> + Clone,
+        sort: bool,
     ) -> AppResult<()> {
         for nsid in self.get_nsids() {
-            self.compact(nsid, max_count, range.clone())?;
+            self.compact(nsid, max_count, range.clone(), sort)?;
         }
         Ok(())
     }
 
     pub fn major_compact(&self) -> AppResult<()> {
-        self.compact_all(self.max_block_size, ..)?;
+        self.compact_all(self.max_block_size, .., true)?;
         let _guard = scc::ebr::Guard::new();
         for (_, handle) in self.hits.iter(&_guard) {
             handle.deref().major_compact()?;

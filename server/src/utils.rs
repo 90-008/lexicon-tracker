@@ -290,10 +290,6 @@ impl RelativeDateTime {
         }
     }
 
-    pub fn ago(duration: Duration) -> Self {
-        Self::new(duration, TimeDirection::Backwards)
-    }
-
     pub fn from_now(duration: Duration) -> Self {
         let cur = get_time();
         if duration > cur {
