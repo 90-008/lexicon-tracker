@@ -124,7 +124,7 @@ impl LexiconHandle {
         self.eps.observe();
     }
 
-    fn encode_block(&self, item_count: usize) -> AppResult<Option<Block>> {
+    fn encode_block(&self, item_count: usize) -> AppResult<Block> {
         let mut writer = ItemEncoder::new(
             WritableByteView::with_size(ItemEncoder::encoded_len(item_count)),
             item_count,
@@ -160,20 +160,20 @@ impl LexiconHandle {
             self.buf_len.store(0, AtomicOrdering::SeqCst);
             let value = writer.finish()?;
             let key = varints_unsigned_encoded([start_timestamp, end_timestamp]);
-            return Ok(Some(Block {
+            return Ok(Block {
                 written,
                 key,
                 data: value.into_inner(),
-            }));
+            });
         }
-        Ok(None)
+        Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "no items are in queue").into())
     }
 }
 
 // counts is nsid -> NsidCounts
 // hits is tree per nsid: varint start time + varint end time -> block of hits
 pub struct Db {
-    inner: Keyspace,
+    ks: Keyspace,
     counts: Partition,
     hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
     sync_pool: threadpool::ThreadPool,
@@ -188,9 +188,7 @@ pub struct Db {
 impl Db {
     pub fn new(path: impl AsRef<Path>, cancel_token: CancellationToken) -> AppResult<Self> {
         tracing::info!("opening db...");
-        let ks = Config::new(path)
-            .cache_size(8 * 1024 * 1024) // from talna
-            .open()?;
+        let ks = Config::new(path).open()?;
         Ok(Self {
             hits: Default::default(),
             sync_pool: threadpool::Builder::new()
@@ -200,7 +198,7 @@ impl Db {
                 "_counts",
                 PartitionCreateOptions::default().compression(fjall::CompressionType::None),
             )?,
-            inner: ks,
+            ks,
             event_broadcaster: broadcast::channel(1000).0,
             eps: RateTracker::new(Duration::from_secs(1)),
             cancel_token,
@@ -223,48 +221,63 @@ impl Db {
         let mut data = Vec::with_capacity(self.hits.len());
         let _guard = scc::ebr::Guard::new();
         for (_, handle) in self.hits.iter(&_guard) {
-            let block_size = self
-                .max_block_size
-                .min(self.min_block_size.max(handle.suggested_block_size()));
+            let mut nsid_data = Vec::with_capacity(2);
+            let is_too_old = handle.since_last_activity() > self.max_last_activity;
+            // if we disconnect for a long time, we want to sync all of what we have
+            // to avoid having many small blocks (even if we run compaction later)
+            let block_size = is_too_old
+                .then_some(self.max_block_size)
+                .unwrap_or_else(|| {
+                    self.max_block_size
+                        .min(self.min_block_size.max(handle.suggested_block_size()))
+                });
             let count = handle.item_count();
             let data_count = count / block_size;
-            let is_too_old = handle.since_last_activity() > self.max_last_activity;
             if count > 0 && (all || data_count > 0 || is_too_old) {
                 for i in 0..data_count {
-                    data.push((i, handle.clone(), block_size));
+                    nsid_data.push((i, handle.clone(), block_size));
                 }
                 // only sync remainder if we haven't met block size
                 let remainder = count % block_size;
                 if data_count == 0 && remainder > 0 {
-                    data.push((data_count, handle.clone(), remainder));
+                    nsid_data.push((data_count, handle.clone(), remainder));
                 }
             }
+            data.push(nsid_data);
         }
         drop(_guard);
 
         // process the blocks
         let mut blocks = Vec::with_capacity(data.len());
         data.into_par_iter()
-            .map(|(i, handle, max_block_size)| {
-                handle
-                    .encode_block(max_block_size)
-                    .transpose()
-                    .map(|r| r.map(|block| (i, block, handle.clone())))
+            .map(|chunk| {
+                chunk
+                    .into_iter()
+                    .map(|(i, handle, max_block_size)| {
+                        handle
+                            .encode_block(max_block_size)
+                            .map(|block| (i, block, handle))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             })
             .collect_into_vec(&mut blocks);
 
         // execute into db
-        for item in blocks.into_iter() {
-            let Some((i, block, handle)) = item.transpose()? else {
-                continue;
-            };
-            self.sync_pool
-                .execute(move || match handle.tree.insert(block.key, block.data) {
-                    Ok(_) => {
-                        tracing::info!("[{i}] synced {} of {} to db", block.written, handle.nsid)
-                    }
-                    Err(err) => tracing::error!("failed to sync block: {}", err),
-                });
+        for chunk in blocks.into_iter() {
+            let chunk = chunk?;
+            for (i, block, handle) in chunk {
+                self.sync_pool
+                    .execute(move || match handle.tree.insert(block.key, block.data) {
+                        Ok(_) => {
+                            tracing::info!(
+                                "[{i}] synced {} of {} to db",
+                                block.written,
+                                handle.nsid
+                            )
+                        }
+                        Err(err) => tracing::error!("failed to sync block: {}", err),
+                    });
+            }
         }
         self.sync_pool.join();
 
@@ -291,8 +304,8 @@ impl Db {
         let handle = match self.hits.peek(nsid, &_guard) {
             Some(handle) => handle.clone(),
             None => {
-                if self.inner.partition_exists(nsid) {
-                    let handle = Arc::new(LexiconHandle::new(&self.inner, nsid));
+                if self.ks.partition_exists(nsid) {
+                    let handle = Arc::new(LexiconHandle::new(&self.ks, nsid));
                     let _ = self.hits.insert(SmolStr::new(nsid), handle.clone());
                     handle
                 } else {
@@ -312,7 +325,7 @@ impl Db {
         f(self
             .hits
             .entry(nsid.clone())
-            .or_insert_with(|| Arc::new(LexiconHandle::new(&self.inner, &nsid)))
+            .or_insert_with(|| Arc::new(LexiconHandle::new(&self.ks, &nsid)))
             .get())
     }
 
@@ -380,7 +393,7 @@ impl Db {
     }
 
     pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str> + 'static> {
-        self.inner
+        self.ks
             .list_partitions()
             .into_iter()
             .filter(|k| k.deref() != "_counts")
