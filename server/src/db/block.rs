@@ -1,12 +1,15 @@
-use ordered_varint::Variable;
+use std::{
+    io::{self, Read, Write},
+    marker::PhantomData,
+    usize,
+};
+
 use rkyv::{
     Archive, Serialize, api::high::HighSerializer, rancor, ser::allocator::ArenaHandle,
     util::AlignedVec,
 };
-use std::{
-    io::{self, Read, Write},
-    marker::PhantomData,
-};
+
+use crate::utils::{ReadVariableExt, WriteVariableExt};
 
 pub struct Item<T> {
     pub timestamp: u64,
@@ -34,21 +37,32 @@ pub struct ItemEncoder<W: Write, T> {
     writer: W,
     prev_timestamp: u64,
     prev_delta: i64,
+    item_count: usize,
     _item: PhantomData<T>,
 }
 
 impl<W: Write, T> ItemEncoder<W, T> {
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: W, item_count: usize) -> Self {
+        assert!(item_count > 0);
         ItemEncoder {
             writer,
             prev_timestamp: 0,
             prev_delta: 0,
+            item_count,
             _item: PhantomData,
         }
     }
 
+    /// NOTE: this is a best effort estimate of the encoded length of the block.
+    /// if T contains variable-length data, the encoded length may be larger than this estimate.
+    pub fn encoded_len(item_count: usize) -> usize {
+        // items length + item count * delta length + data length
+        size_of::<usize>() + item_count * size_of::<(i64, T)>()
+    }
+
     pub fn encode(&mut self, item: &Item<T>) -> io::Result<()> {
         if self.prev_timestamp == 0 {
+            self.writer.write_varint(self.item_count)?;
             // self.writer.write_varint(item.timestamp)?;
             self.prev_timestamp = item.timestamp;
             self.write_data(&item.data)?;
@@ -82,23 +96,31 @@ pub struct ItemDecoder<R, T> {
     reader: R,
     current_timestamp: u64,
     current_delta: i64,
-    first_item: bool,
+    items_read: usize,
+    expected: usize,
     _item: PhantomData<T>,
 }
 
 impl<R: Read, T: Archive> ItemDecoder<R, T> {
-    pub fn new(reader: R, start_timestamp: u64) -> io::Result<Self> {
+    pub fn new(mut reader: R, start_timestamp: u64) -> io::Result<Self> {
+        let expected = match reader.read_varint() {
+            Ok(expected) => expected,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => 0,
+            Err(e) => return Err(e.into()),
+        };
+
         Ok(ItemDecoder {
             reader,
             current_timestamp: start_timestamp,
             current_delta: 0,
-            first_item: true,
+            items_read: 0,
+            expected,
             _item: PhantomData,
         })
     }
 
     pub fn decode(&mut self) -> io::Result<Option<Item<T>>> {
-        if self.first_item {
+        if self.items_read == 0 {
             // read the first timestamp
             // let timestamp = match self.reader.read_varint::<u64>() {
             //     Ok(timestamp) => timestamp,
@@ -110,12 +132,17 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
             let Some(data_raw) = self.read_item()? else {
                 return Ok(None);
             };
-            self.first_item = false;
+
+            self.items_read += 1;
             return Ok(Some(Item {
                 timestamp: self.current_timestamp,
                 data: data_raw,
                 phantom: PhantomData,
             }));
+        }
+
+        if self.items_read >= self.expected {
+            return Ok(None);
         }
 
         let Some(_delta) = self.read_timestamp()? else {
@@ -134,6 +161,7 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
             }
         };
 
+        self.items_read += 1;
         Ok(Some(Item {
             timestamp: self.current_timestamp,
             data: data_raw,
@@ -175,21 +203,11 @@ impl<R: Read, T: Archive> Iterator for ItemDecoder<R, T> {
     fn next(&mut self) -> Option<Self::Item> {
         self.decode().transpose()
     }
-}
 
-pub trait WriteVariableExt: Write {
-    fn write_varint(&mut self, value: impl Variable) -> io::Result<usize> {
-        value.encode_variable(self)
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.expected, Some(self.expected))
     }
 }
-impl<W: Write> WriteVariableExt for W {}
-
-pub trait ReadVariableExt: Read {
-    fn read_varint<T: Variable>(&mut self) -> io::Result<T> {
-        T::decode_variable(self)
-    }
-}
-impl<R: Read> ReadVariableExt for R {}
 
 #[cfg(test)]
 mod test {
@@ -215,7 +233,7 @@ mod test {
 
         // encode
         let mut buffer = Vec::new();
-        let mut encoder = ItemEncoder::new(&mut buffer);
+        let mut encoder = ItemEncoder::new(&mut buffer, 1);
         encoder.encode(&item).unwrap();
         encoder.finish().unwrap();
 
@@ -266,7 +284,7 @@ mod test {
 
         // encode
         let mut buffer = Vec::new();
-        let mut encoder = ItemEncoder::new(&mut buffer);
+        let mut encoder = ItemEncoder::new(&mut buffer, items.len());
 
         for item in &items {
             encoder.encode(item).unwrap();
@@ -322,7 +340,7 @@ mod test {
 
         // encode
         let mut buffer = Vec::new();
-        let mut encoder = ItemEncoder::new(&mut buffer);
+        let mut encoder = ItemEncoder::new(&mut buffer, items.len());
 
         for item in &items {
             encoder.encode(item).unwrap();
@@ -380,7 +398,7 @@ mod test {
         ];
 
         let mut buffer = Vec::new();
-        let mut encoder = ItemEncoder::new(&mut buffer);
+        let mut encoder = ItemEncoder::new(&mut buffer, items.len());
 
         for item in &items {
             encoder.encode(item).unwrap();
@@ -430,7 +448,7 @@ mod test {
         ];
 
         let mut buffer = Vec::new();
-        let mut encoder = ItemEncoder::new(&mut buffer);
+        let mut encoder = ItemEncoder::new(&mut buffer, items.len());
 
         for item in &items {
             encoder.encode(item).unwrap();
@@ -462,7 +480,7 @@ mod test {
         let items = vec![Item::new(1000, &small_data), Item::new(1001, &large_data)];
 
         let mut buffer = Vec::new();
-        let mut encoder = ItemEncoder::new(&mut buffer);
+        let mut encoder = ItemEncoder::new(&mut buffer, items.len());
 
         for item in &items {
             encoder.encode(item).unwrap();

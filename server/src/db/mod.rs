@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, Write},
+    io::Cursor,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
     sync::{
@@ -12,7 +12,6 @@ use std::{
 use byteview::ByteView;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
 use itertools::{Either, Itertools};
-use ordered_varint::Variable;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
@@ -20,10 +19,12 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    db::block::{ReadVariableExt, WriteVariableExt},
     error::{AppError, AppResult},
     jetstream::JetstreamEvent,
-    utils::{CLOCK, DefaultRateTracker, RateTracker},
+    utils::{
+        CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt, WritableByteView,
+        varints_unsigned_encoded,
+    },
 };
 
 mod block;
@@ -75,58 +76,6 @@ type ItemDecoder = block::ItemDecoder<Cursor<Slice>, NsidHit>;
 type ItemEncoder = block::ItemEncoder<WritableByteView, NsidHit>;
 type Item = block::Item<NsidHit>;
 
-struct WritableByteView {
-    view: ByteView,
-    written: usize,
-}
-
-impl WritableByteView {
-    // returns None if the view already has a reference to it
-    fn with_size(capacity: usize) -> Self {
-        Self {
-            view: ByteView::with_size(capacity),
-            written: 0,
-        }
-    }
-
-    #[inline(always)]
-    fn into_inner(self) -> ByteView {
-        self.view
-    }
-}
-
-impl Write for WritableByteView {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let len = buf.len();
-        if len > self.view.len() - self.written {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::StorageFull,
-                "buffer full",
-            ));
-        }
-        // SAFETY: this is safe because we have checked that the buffer is not full
-        // SAFETY: we own the mutator so no other references to the view exist
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                buf.as_ptr(),
-                self.view
-                    .get_mut()
-                    .unwrap_unchecked()
-                    .as_mut_ptr()
-                    .add(self.written),
-                len,
-            );
-            self.written += len;
-        }
-        Ok(len)
-    }
-
-    #[inline(always)]
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 struct Block {
     written: usize,
     key: ByteView,
@@ -175,10 +124,11 @@ impl LexiconHandle {
         self.eps.observe();
     }
 
-    fn encode_block(&self, max_block_size: usize) -> AppResult<Option<Block>> {
-        let buf_size =
-            size_of::<u64>() + self.item_count().min(max_block_size) * size_of::<(u64, NsidHit)>();
-        let mut writer = ItemEncoder::new(WritableByteView::with_size(buf_size));
+    fn encode_block(&self, item_count: usize) -> AppResult<Option<Block>> {
+        let mut writer = ItemEncoder::new(
+            WritableByteView::with_size(ItemEncoder::encoded_len(item_count)),
+            item_count,
+        );
         let mut start_timestamp = None;
         let mut end_timestamp = None;
         let mut written = 0_usize;
@@ -194,20 +144,25 @@ impl LexiconHandle {
                 start_timestamp = Some(event.timestamp);
             }
             end_timestamp = Some(event.timestamp);
-            if written >= max_block_size {
+            if written >= item_count {
                 break;
             }
             written += 1;
         }
+        if written != item_count {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unexpected number of items, invalid data?",
+            )
+            .into());
+        }
         if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
             self.buf_len.store(0, AtomicOrdering::SeqCst);
             let value = writer.finish()?;
-            let mut key = WritableByteView::with_size(size_of::<u64>() * 2);
-            key.write_varint(start_timestamp)?;
-            key.write_varint(end_timestamp)?;
+            let key = varints_unsigned_encoded([start_timestamp, end_timestamp]);
             return Ok(Some(Block {
                 written,
-                key: key.into_inner(),
+                key,
                 data: value.into_inner(),
             }));
         }
@@ -449,37 +404,46 @@ impl Db {
         nsid: &str,
         range: impl RangeBounds<u64> + std::fmt::Debug,
     ) -> impl Iterator<Item = AppResult<Item>> {
-        let start = range
-            .start_bound()
-            .cloned()
-            .map(|t| unsafe { t.to_variable_vec().unwrap_unchecked() });
-        let end = range
-            .end_bound()
-            .cloned()
-            .map(|t| unsafe { t.to_variable_vec().unwrap_unchecked() });
-        let limit = match range.end_bound().cloned() {
+        let start_limit = match range.start_bound().cloned() {
+            Bound::Included(start) => start,
+            Bound::Excluded(start) => start.saturating_add(1),
+            Bound::Unbounded => 0,
+        };
+        let end_limit = match range.end_bound().cloned() {
             Bound::Included(end) => end,
             Bound::Excluded(end) => end.saturating_sub(1),
             Bound::Unbounded => u64::MAX,
         };
+        let end_key = varints_unsigned_encoded([end_limit]);
 
         self.maybe_run_in_nsid_tree(nsid, move |handle| {
             let map_block = move |(key, val)| {
                 let mut key_reader = Cursor::new(key);
                 let start_timestamp = key_reader.read_varint::<u64>()?;
+                if start_timestamp < start_limit {
+                    return Ok(None);
+                }
                 let items = ItemDecoder::new(Cursor::new(val), start_timestamp)?
                     .take_while(move |item| {
-                        item.as_ref().map_or(true, |item| item.timestamp <= limit)
+                        item.as_ref().map_or(true, |item| {
+                            item.timestamp <= end_limit && item.timestamp >= start_limit
+                        })
                     })
                     .map(|res| res.map_err(AppError::from));
-                Ok(items)
+                Ok(Some(items))
             };
 
             Either::Left(
                 handle
                     .tree
-                    .range(TimestampRange { start, end })
-                    .map(move |res| res.map_err(AppError::from).and_then(map_block))
+                    .range(..end_key)
+                    .rev()
+                    .map_while(move |res| {
+                        res.map_err(AppError::from).and_then(map_block).transpose()
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
                     .flatten()
                     .flatten(),
             )
@@ -500,24 +464,5 @@ impl Db {
                 .map_err(AppError::from)
         })
         .unwrap_or(Ok(0))
-    }
-}
-
-type TimestampRepr = Vec<u8>;
-
-struct TimestampRange {
-    start: Bound<TimestampRepr>,
-    end: Bound<TimestampRepr>,
-}
-
-impl RangeBounds<TimestampRepr> for TimestampRange {
-    #[inline(always)]
-    fn start_bound(&self) -> Bound<&TimestampRepr> {
-        self.start.as_ref()
-    }
-
-    #[inline(always)]
-    fn end_bound(&self) -> Bound<&TimestampRepr> {
-        self.end.as_ref()
     }
 }

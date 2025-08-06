@@ -1,5 +1,104 @@
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use byteview::ByteView;
+use ordered_varint::Variable;
+
+pub trait WriteVariableExt: Write {
+    fn write_varint(&mut self, value: impl Variable) -> io::Result<usize> {
+        value.encode_variable(self)
+    }
+}
+impl<W: Write> WriteVariableExt for W {}
+
+pub trait ReadVariableExt: Read {
+    fn read_varint<T: Variable>(&mut self) -> io::Result<T> {
+        T::decode_variable(self)
+    }
+}
+impl<R: Read> ReadVariableExt for R {}
+
+pub struct WritableByteView {
+    view: ByteView,
+    written: usize,
+}
+
+impl WritableByteView {
+    // returns None if the view already has a reference to it
+    pub fn with_size(capacity: usize) -> Self {
+        Self {
+            view: ByteView::with_size(capacity),
+            written: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn into_inner(self) -> ByteView {
+        self.view
+    }
+}
+
+impl Write for WritableByteView {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let len = buf.len();
+        if len > self.view.len() - self.written {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "buffer full",
+            ));
+        }
+        // SAFETY: this is safe because we have checked that the buffer is not full
+        // SAFETY: we own the mutator so no other references to the view exist
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                buf.as_ptr(),
+                self.view
+                    .get_mut()
+                    .unwrap_unchecked()
+                    .as_mut_ptr()
+                    .add(self.written),
+                len,
+            );
+            self.written += len;
+        }
+        Ok(len)
+    }
+
+    #[inline(always)]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn varints_unsigned_encoded<const N: usize>(values: [u64; N]) -> ByteView {
+    let mut buf =
+        WritableByteView::with_size(values.into_iter().map(varint_unsigned_encoded_len).sum());
+    for value in values {
+        // cant fail
+        let _ = buf.write_varint(value);
+    }
+    buf.into_inner()
+}
+
+// gets the encoded length of a varint-encoded unsigned integer
+// see ordered_varint
+pub fn varint_unsigned_encoded_len(value: u64) -> usize {
+    let value = value.to_be_bytes();
+    value
+        .iter()
+        .enumerate()
+        .find_map(|(index, &byte)| {
+            (byte > 0).then(|| {
+                let extra_bytes = 7 - index;
+                (byte < 16)
+                    .then(|| extra_bytes + 1)
+                    .unwrap_or_else(|| extra_bytes + 2)
+            })
+        })
+        .unwrap_or(0)
+        .max(1)
+}
 
 pub static CLOCK: std::sync::LazyLock<quanta::Clock> =
     std::sync::LazyLock::new(|| quanta::Clock::new());
