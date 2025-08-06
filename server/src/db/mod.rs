@@ -157,7 +157,7 @@ impl Db {
                 }
                 // only sync remainder if we haven't met block size
                 let remainder = count % block_size;
-                if data_count == 0 && remainder > 0 {
+                if (all || data_count == 0) && remainder > 0 {
                     nsid_data.push((data_count, handle.clone(), remainder));
                 }
             }
