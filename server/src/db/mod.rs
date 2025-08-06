@@ -2,17 +2,16 @@ use std::{
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
-    },
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
 
 use byteview::ByteView;
 use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
 use itertools::{Either, Itertools};
+use parking_lot::Mutex;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rclite::Arc;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::SmolStr;
 use tokio::sync::broadcast;
@@ -85,9 +84,7 @@ struct Block {
 pub struct LexiconHandle {
     tree: Partition,
     nsid: SmolStr,
-    buf: Arc<scc::Queue<EventRecord>>,
-    // this is stored here since scc::Queue does not have O(1) length
-    buf_len: AtomicUsize,   // seqcst
+    buf: Arc<Mutex<Vec<EventRecord>>>,
     last_insert: AtomicU64, // relaxed
     eps: DefaultRateTracker,
 }
@@ -99,14 +96,13 @@ impl LexiconHandle {
             tree: keyspace.open_partition(nsid, opts).unwrap(),
             nsid: nsid.into(),
             buf: Default::default(),
-            buf_len: AtomicUsize::new(0),
             last_insert: AtomicU64::new(0),
             eps: RateTracker::new(Duration::from_secs(10)),
         }
     }
 
     fn item_count(&self) -> usize {
-        self.buf_len.load(AtomicOrdering::SeqCst)
+        self.buf.lock().len()
     }
 
     fn since_last_activity(&self) -> u64 {
@@ -118,11 +114,12 @@ impl LexiconHandle {
     }
 
     fn insert(&self, event: EventRecord) {
-        self.buf.push(event);
-        self.buf_len.fetch_add(1, AtomicOrdering::SeqCst);
+        self.buf.lock().push(event);
         self.last_insert.store(CLOCK.raw(), AtomicOrdering::Relaxed);
         self.eps.observe();
     }
+
+    fn compact(&self) {}
 
     fn encode_block(&self, item_count: usize) -> AppResult<Block> {
         let mut writer = ItemEncoder::new(
@@ -132,7 +129,7 @@ impl LexiconHandle {
         let mut start_timestamp = None;
         let mut end_timestamp = None;
         let mut written = 0_usize;
-        while let Some(event) = self.buf.pop() {
+        for event in self.buf.lock().drain(..) {
             let item = Item::new(
                 event.timestamp,
                 &NsidHit {
@@ -157,7 +154,6 @@ impl LexiconHandle {
             .into());
         }
         if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
-            self.buf_len.store(0, AtomicOrdering::SeqCst);
             let value = writer.finish()?;
             let key = varints_unsigned_encoded([start_timestamp, end_timestamp]);
             return Ok(Block {
@@ -208,12 +204,24 @@ impl Db {
         })
     }
 
+    #[inline(always)]
     pub fn shutting_down(&self) -> impl Future<Output = ()> {
         self.cancel_token.cancelled()
     }
 
+    #[inline(always)]
     pub fn is_shutting_down(&self) -> bool {
         self.cancel_token.is_cancelled()
+    }
+
+    #[inline(always)]
+    pub fn eps(&self) -> usize {
+        self.eps.rate() as usize
+    }
+
+    #[inline(always)]
+    pub fn new_listener(&self) -> broadcast::Receiver<(SmolStr, NsidCounts)> {
+        self.event_broadcaster.subscribe()
     }
 
     pub fn sync(&self, all: bool) -> AppResult<()> {
@@ -284,15 +292,7 @@ impl Db {
         Ok(())
     }
 
-    #[inline(always)]
-    pub fn eps(&self) -> usize {
-        self.eps.rate() as usize
-    }
-
-    #[inline(always)]
-    pub fn new_listener(&self) -> broadcast::Receiver<(SmolStr, NsidCounts)> {
-        self.event_broadcaster.subscribe()
-    }
+    pub fn compact(&self) {}
 
     #[inline(always)]
     fn maybe_run_in_nsid_tree<T>(

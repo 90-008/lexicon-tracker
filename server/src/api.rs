@@ -3,7 +3,6 @@ use std::{
     fmt::Display,
     net::SocketAddr,
     ops::{Bound, Deref, RangeBounds},
-    sync::Arc,
     time::Duration,
 };
 
@@ -16,6 +15,7 @@ use axum::{
     routing::get,
 };
 use axum_tws::{Message, WebSocketUpgrade};
+use rclite::Arc;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use tokio_util::sync::CancellationToken;

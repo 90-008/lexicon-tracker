@@ -119,6 +119,10 @@ impl<R: Read, T: Archive> ItemDecoder<R, T> {
         })
     }
 
+    pub fn item_count(&self) -> usize {
+        self.expected
+    }
+
     pub fn decode(&mut self) -> io::Result<Option<Item<T>>> {
         if self.items_read == 0 {
             // read the first timestamp
