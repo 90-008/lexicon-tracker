@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{ops::Deref, time::Duration};
 
 use rclite::Arc;
 use smol_str::ToSmolStr;
@@ -11,7 +11,7 @@ use crate::{
     db::{Db, EventRecord},
     error::AppError,
     jetstream::JetstreamClient,
-    utils::CLOCK,
+    utils::{CLOCK, RelativeDateTime, get_time},
 };
 
 mod api;
@@ -37,6 +37,10 @@ async fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("compact") => {
             compact();
+            return;
+        }
+        Some("migrate") => {
+            migrate();
             return;
         }
         Some("debug") => {
@@ -106,28 +110,63 @@ async fn main() {
         }
     });
 
-    let sync_task = tokio::task::spawn({
+    let db_task = tokio::task::spawn({
         let db = db.clone();
         async move {
+            let sync_period = Duration::from_secs(10);
+            let mut sync_interval = tokio::time::interval(sync_period);
+            sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            let compact_period = std::time::Duration::from_secs(60 * 30); // 30 mins
+            let mut compact_interval = tokio::time::interval(compact_period);
+            compact_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
             loop {
-                let sync_db = tokio::task::spawn_blocking({
-                    let db = db.clone();
-                    move || {
-                        if db.is_shutting_down() {
-                            return;
+                let sync_db = async || {
+                    tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            if db.is_shutting_down() {
+                                return;
+                            }
+                            match db.sync(false) {
+                                Ok(_) => (),
+                                Err(e) => tracing::error!("failed to sync db: {}", e),
+                            }
                         }
-                        match db.sync(false) {
-                            Ok(_) => (),
-                            Err(e) => tracing::error!("failed to sync db: {}", e),
+                    })
+                    .await
+                    .unwrap();
+                };
+                let compact_db = async || {
+                    tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            if db.is_shutting_down() {
+                                return;
+                            }
+                            let end = get_time() - compact_period / 2;
+                            let start = end - compact_period;
+                            let range = start.as_secs()..end.as_secs();
+                            tracing::info!(
+                                {
+                                    start = %RelativeDateTime::from_now(start),
+                                    end = %RelativeDateTime::from_now(end),
+                                },
+                                "running compaction...",
+                            );
+                            match db.compact_all(db.max_block_size, range) {
+                                Ok(_) => (),
+                                Err(e) => tracing::error!("failed to compact db: {}", e),
+                            }
                         }
-                    }
-                });
+                    })
+                    .await
+                    .unwrap();
+                };
                 tokio::select! {
-                    _ = sync_db => {}
-                    _ = db.shutting_down() => break,
-                }
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
+                    _ = sync_interval.tick() => sync_db().await,
+                    _ = compact_interval.tick() => compact_db().await,
                     _ = db.shutting_down() => break,
                 }
             }
@@ -157,22 +196,54 @@ async fn main() {
     tracing::info!("shutting down...");
     cancel_token.cancel();
     ingest_events.join().expect("failed to join ingest events");
-    sync_task.await.expect("cant join sync task");
+    db_task.await.expect("cant join db task");
     db.sync(true).expect("cant sync db");
 }
 
 fn debug() {
     let db = Db::new(".fjall_data", CancellationToken::new()).expect("couldnt create db");
-    for nsid in db.get_nsids() {
-        let nsid = nsid.deref();
-        for hit in db.get_hits(nsid, ..) {
-            let hit = hit.expect("cant read event");
-            println!("{nsid} {}", hit.timestamp);
+    let info = db.info().expect("cant get db info");
+    println!("disk size: {}", info.disk_size);
+    for (nsid, blocks) in info.nsids {
+        print!("{nsid}:");
+        let mut last_size = 0;
+        let mut same_size_count = 0;
+        for item_count in blocks {
+            if item_count == last_size {
+                same_size_count += 1;
+            } else {
+                if same_size_count > 1 {
+                    print!("x{}", same_size_count);
+                }
+                print!(" {item_count}");
+                same_size_count = 0;
+            }
+            last_size = item_count;
         }
+        print!("\n");
     }
 }
 
 fn compact() {
+    let db = Db::new(".fjall_data", CancellationToken::new()).expect("couldnt create db");
+    let info = db.info().expect("cant get db info");
+    db.major_compact().expect("cant compact");
+    std::thread::sleep(Duration::from_secs(5));
+    let compacted_info = db.info().expect("cant get db info");
+    println!(
+        "disk size: {} -> {}",
+        info.disk_size, compacted_info.disk_size
+    );
+    for (nsid, blocks) in info.nsids {
+        println!(
+            "{nsid}: {} -> {}",
+            blocks.len(),
+            compacted_info.nsids[&nsid].len()
+        )
+    }
+}
+
+fn migrate() {
     let cancel_token = CancellationToken::new();
     let from = Arc::new(
         Db::new(".fjall_data_from", cancel_token.child_token()).expect("couldnt create db"),

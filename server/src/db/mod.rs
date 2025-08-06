@@ -1,32 +1,31 @@
 use std::{
+    collections::HashMap,
+    fmt::Debug,
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
 
-use byteview::ByteView;
-use fjall::{Config, Keyspace, Partition, PartitionCreateOptions, Slice};
+use byteview::StrView;
+use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use itertools::{Either, Itertools};
-use parking_lot::Mutex;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rclite::Arc;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
-use smol_str::SmolStr;
+use smol_str::{SmolStr, ToSmolStr};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    db::handle::{ItemDecoder, LexiconHandle},
     error::{AppError, AppResult},
     jetstream::JetstreamEvent,
-    utils::{
-        CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt, WritableByteView,
-        varints_unsigned_encoded,
-    },
+    utils::{RateTracker, ReadVariableExt, varints_unsigned_encoded},
 };
 
 mod block;
+mod handle;
 
 #[derive(Clone, Debug, Default, Archive, Deserialize, Serialize, PartialEq)]
 #[rkyv(compare(PartialEq), derive(Debug))]
@@ -71,99 +70,9 @@ impl EventRecord {
     }
 }
 
-type ItemDecoder = block::ItemDecoder<Cursor<Slice>, NsidHit>;
-type ItemEncoder = block::ItemEncoder<WritableByteView, NsidHit>;
-type Item = block::Item<NsidHit>;
-
-struct Block {
-    written: usize,
-    key: ByteView,
-    data: ByteView,
-}
-
-pub struct LexiconHandle {
-    tree: Partition,
-    nsid: SmolStr,
-    buf: Arc<Mutex<Vec<EventRecord>>>,
-    last_insert: AtomicU64, // relaxed
-    eps: DefaultRateTracker,
-}
-
-impl LexiconHandle {
-    fn new(keyspace: &Keyspace, nsid: &str) -> Self {
-        let opts = PartitionCreateOptions::default().compression(fjall::CompressionType::Miniz(9));
-        Self {
-            tree: keyspace.open_partition(nsid, opts).unwrap(),
-            nsid: nsid.into(),
-            buf: Default::default(),
-            last_insert: AtomicU64::new(0),
-            eps: RateTracker::new(Duration::from_secs(10)),
-        }
-    }
-
-    fn item_count(&self) -> usize {
-        self.buf.lock().len()
-    }
-
-    fn since_last_activity(&self) -> u64 {
-        CLOCK.delta_as_nanos(self.last_insert.load(AtomicOrdering::Relaxed), CLOCK.raw())
-    }
-
-    fn suggested_block_size(&self) -> usize {
-        self.eps.rate() as usize * 60
-    }
-
-    fn insert(&self, event: EventRecord) {
-        self.buf.lock().push(event);
-        self.last_insert.store(CLOCK.raw(), AtomicOrdering::Relaxed);
-        self.eps.observe();
-    }
-
-    fn compact(&self) {}
-
-    fn encode_block(&self, item_count: usize) -> AppResult<Block> {
-        let mut writer = ItemEncoder::new(
-            WritableByteView::with_size(ItemEncoder::encoded_len(item_count)),
-            item_count,
-        );
-        let mut start_timestamp = None;
-        let mut end_timestamp = None;
-        let mut written = 0_usize;
-        for event in self.buf.lock().drain(..) {
-            let item = Item::new(
-                event.timestamp,
-                &NsidHit {
-                    deleted: event.deleted,
-                },
-            );
-            writer.encode(&item)?;
-            if start_timestamp.is_none() {
-                start_timestamp = Some(event.timestamp);
-            }
-            end_timestamp = Some(event.timestamp);
-            if written >= item_count {
-                break;
-            }
-            written += 1;
-        }
-        if written != item_count {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "unexpected number of items, invalid data?",
-            )
-            .into());
-        }
-        if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
-            let value = writer.finish()?;
-            let key = varints_unsigned_encoded([start_timestamp, end_timestamp]);
-            return Ok(Block {
-                written,
-                key,
-                data: value.into_inner(),
-            });
-        }
-        Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "no items are in queue").into())
-    }
+pub struct DbInfo {
+    pub nsids: HashMap<SmolStr, Vec<usize>>,
+    pub disk_size: u64,
 }
 
 // counts is nsid -> NsidCounts
@@ -176,9 +85,9 @@ pub struct Db {
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: RateTracker<100>,
     cancel_token: CancellationToken,
-    min_block_size: usize,
-    max_block_size: usize,
-    max_last_activity: u64,
+    pub min_block_size: usize,
+    pub max_block_size: usize,
+    pub max_last_activity: u64,
 }
 
 impl Db {
@@ -231,8 +140,9 @@ impl Db {
         for (_, handle) in self.hits.iter(&_guard) {
             let mut nsid_data = Vec::with_capacity(2);
             let is_too_old = handle.since_last_activity() > self.max_last_activity;
-            // if we disconnect for a long time, we want to sync all of what we have
-            // to avoid having many small blocks (even if we run compaction later)
+            // if we disconnect for a long time, we want to sync all of what we
+            // have to avoid having many small blocks (even if we run compaction
+            // later, it reduces work until we run compaction)
             let block_size = is_too_old
                 .then_some(self.max_block_size)
                 .unwrap_or_else(|| {
@@ -275,12 +185,12 @@ impl Db {
             let chunk = chunk?;
             for (i, block, handle) in chunk {
                 self.sync_pool
-                    .execute(move || match handle.tree.insert(block.key, block.data) {
+                    .execute(move || match handle.insert(block.key, block.data) {
                         Ok(_) => {
                             tracing::info!(
                                 "[{i}] synced {} of {} to db",
                                 block.written,
-                                handle.nsid
+                                handle.nsid()
                             )
                         }
                         Err(err) => tracing::error!("failed to sync block: {}", err),
@@ -292,20 +202,46 @@ impl Db {
         Ok(())
     }
 
-    pub fn compact(&self) {}
+    pub fn compact(
+        &self,
+        nsid: impl AsRef<str>,
+        max_count: usize,
+        range: impl RangeBounds<u64>,
+    ) -> AppResult<()> {
+        let Some(handle) = self.get_handle(nsid) else {
+            return Ok(());
+        };
+        handle.compact(max_count, range)
+    }
+
+    pub fn compact_all(
+        &self,
+        max_count: usize,
+        range: impl RangeBounds<u64> + Clone,
+    ) -> AppResult<()> {
+        for nsid in self.get_nsids() {
+            self.compact(nsid, max_count, range.clone())?;
+        }
+        Ok(())
+    }
+
+    pub fn major_compact(&self) -> AppResult<()> {
+        self.compact_all(self.max_block_size, ..)?;
+        let _guard = scc::ebr::Guard::new();
+        for (_, handle) in self.hits.iter(&_guard) {
+            handle.deref().major_compact()?;
+        }
+        Ok(())
+    }
 
     #[inline(always)]
-    fn maybe_run_in_nsid_tree<T>(
-        &self,
-        nsid: &str,
-        f: impl FnOnce(&LexiconHandle) -> T,
-    ) -> Option<T> {
+    fn get_handle(&self, nsid: impl AsRef<str>) -> Option<Arc<LexiconHandle>> {
         let _guard = scc::ebr::Guard::new();
-        let handle = match self.hits.peek(nsid, &_guard) {
+        let handle = match self.hits.peek(nsid.as_ref(), &_guard) {
             Some(handle) => handle.clone(),
             None => {
-                if self.ks.partition_exists(nsid) {
-                    let handle = Arc::new(LexiconHandle::new(&self.ks, nsid));
+                if self.ks.partition_exists(nsid.as_ref()) {
+                    let handle = Arc::new(LexiconHandle::new(&self.ks, nsid.as_ref()));
                     let _ = self.hits.insert(SmolStr::new(nsid), handle.clone());
                     handle
                 } else {
@@ -313,45 +249,37 @@ impl Db {
                 }
             }
         };
-        Some(f(&handle))
+        Some(handle)
     }
 
     #[inline(always)]
-    fn run_in_nsid_tree<T>(
-        &self,
-        nsid: &SmolStr,
-        f: impl FnOnce(&LexiconHandle) -> AppResult<T>,
-    ) -> AppResult<T> {
-        f(self
-            .hits
+    fn ensure_handle(&self, nsid: &SmolStr) -> impl Deref<Target = Arc<LexiconHandle>> + use<'_> {
+        self.hits
             .entry(nsid.clone())
             .or_insert_with(|| Arc::new(LexiconHandle::new(&self.ks, &nsid)))
-            .get())
     }
 
     pub fn ingest_events(&self, events: impl Iterator<Item = EventRecord>) -> AppResult<()> {
         for (key, chunk) in events.chunk_by(|event| event.nsid.clone()).into_iter() {
             let mut counts = self.get_count(&key)?;
-            self.run_in_nsid_tree(&key, move |tree| {
-                for event in chunk {
-                    let EventRecord {
-                        timestamp, deleted, ..
-                    } = event.clone();
+            let handle = self.ensure_handle(&key);
+            for event in chunk {
+                let EventRecord {
+                    timestamp, deleted, ..
+                } = event.clone();
 
-                    tree.insert(event);
+                handle.queue(event);
 
-                    // increment count
-                    counts.last_seen = timestamp;
-                    if deleted {
-                        counts.deleted_count += 1;
-                    } else {
-                        counts.count += 1;
-                    }
-
-                    self.eps.observe();
+                // increment count
+                counts.last_seen = timestamp;
+                if deleted {
+                    counts.deleted_count += 1;
+                } else {
+                    counts.count += 1;
                 }
-                Ok(())
-            })?;
+
+                self.eps.observe();
+            }
             self.insert_count(&key, &counts)?;
             if self.event_broadcaster.receiver_count() > 0 {
                 let _ = self.event_broadcaster.send((key, counts));
@@ -392,31 +320,40 @@ impl Db {
         })
     }
 
-    pub fn get_nsids(&self) -> impl Iterator<Item = impl Deref<Target = str> + 'static> {
+    pub fn get_nsids(&self) -> impl Iterator<Item = StrView> {
         self.ks
             .list_partitions()
             .into_iter()
             .filter(|k| k.deref() != "_counts")
     }
 
-    pub fn get_hits_debug(&self, nsid: &str) -> impl Iterator<Item = AppResult<(Slice, Slice)>> {
-        self.maybe_run_in_nsid_tree(nsid, |handle| {
-            Either::Left(
-                handle
-                    .tree
-                    .iter()
-                    .rev()
-                    .map(|res| res.map_err(AppError::from)),
-            )
+    pub fn info(&self) -> AppResult<DbInfo> {
+        let mut nsids = HashMap::new();
+        for nsid in self.get_nsids() {
+            let Some(handle) = self.get_handle(&nsid) else {
+                continue;
+            };
+            let block_lens = handle.iter().rev().try_fold(Vec::new(), |mut acc, item| {
+                let (key, value) = item?;
+                let mut timestamps = Cursor::new(key);
+                let start_timestamp = timestamps.read_varint()?;
+                let decoder = ItemDecoder::new(Cursor::new(value), start_timestamp)?;
+                acc.push(decoder.item_count());
+                AppResult::Ok(acc)
+            })?;
+            nsids.insert(nsid.to_smolstr(), block_lens);
+        }
+        Ok(DbInfo {
+            nsids,
+            disk_size: self.ks.disk_space(),
         })
-        .unwrap_or_else(|| Either::Right(std::iter::empty()))
     }
 
     pub fn get_hits(
         &self,
         nsid: &str,
         range: impl RangeBounds<u64> + std::fmt::Debug,
-    ) -> impl Iterator<Item = AppResult<Item>> {
+    ) -> impl Iterator<Item = AppResult<handle::Item>> {
         let start_limit = match range.start_bound().cloned() {
             Bound::Included(start) => start,
             Bound::Excluded(start) => start.saturating_add(1),
@@ -429,53 +366,51 @@ impl Db {
         };
         let end_key = varints_unsigned_encoded([end_limit]);
 
-        self.maybe_run_in_nsid_tree(nsid, move |handle| {
-            let map_block = move |(key, val)| {
-                let mut key_reader = Cursor::new(key);
-                let start_timestamp = key_reader.read_varint::<u64>()?;
-                if start_timestamp < start_limit {
-                    return Ok(None);
-                }
-                let items = ItemDecoder::new(Cursor::new(val), start_timestamp)?
-                    .take_while(move |item| {
-                        item.as_ref().map_or(true, |item| {
-                            item.timestamp <= end_limit && item.timestamp >= start_limit
-                        })
-                    })
-                    .map(|res| res.map_err(AppError::from));
-                Ok(Some(items))
-            };
+        let Some(handle) = self.get_handle(nsid) else {
+            return Either::Right(std::iter::empty());
+        };
 
-            Either::Left(
-                handle
-                    .tree
-                    .range(..end_key)
-                    .rev()
-                    .map_while(move |res| {
-                        res.map_err(AppError::from).and_then(map_block).transpose()
+        let map_block = move |(key, val)| {
+            let mut key_reader = Cursor::new(key);
+            let start_timestamp = key_reader.read_varint::<u64>()?;
+            if start_timestamp < start_limit {
+                return Ok(None);
+            }
+            let items = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?
+                .take_while(move |item| {
+                    item.as_ref().map_or(true, |item| {
+                        item.timestamp <= end_limit && item.timestamp >= start_limit
                     })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .flatten()
-                    .flatten(),
-            )
-        })
-        .unwrap_or_else(|| Either::Right(std::iter::empty()))
+                })
+                .map(|res| res.map_err(AppError::from));
+            Ok(Some(items))
+        };
+
+        Either::Left(
+            handle
+                .range(..end_key)
+                .rev()
+                .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .flatten()
+                .flatten(),
+        )
     }
 
     pub fn tracking_since(&self) -> AppResult<u64> {
         // HACK: we should actually store when we started tracking but im lazy
-        // should be accurate enough
-        self.maybe_run_in_nsid_tree("app.bsky.feed.like", |handle| {
-            let Some((timestamps_raw, _)) = handle.tree.first_key_value()? else {
-                return Ok(0);
-            };
-            let mut timestamp_reader = Cursor::new(timestamps_raw);
-            timestamp_reader
-                .read_varint::<u64>()
-                .map_err(AppError::from)
-        })
-        .unwrap_or(Ok(0))
+        // this should be accurate enough
+        let Some(handle) = self.get_handle("app.bsky.feed.like") else {
+            return Ok(0);
+        };
+        let Some((timestamps_raw, _)) = handle.first_key_value()? else {
+            return Ok(0);
+        };
+        let mut timestamp_reader = Cursor::new(timestamps_raw);
+        timestamp_reader
+            .read_varint::<u64>()
+            .map_err(AppError::from)
     }
 }

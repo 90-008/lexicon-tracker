@@ -5,6 +5,12 @@ use std::time::Duration;
 use byteview::ByteView;
 use ordered_varint::Variable;
 
+pub fn get_time() -> Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+}
+
 pub trait WriteVariableExt: Write {
     fn write_varint(&mut self, value: impl Variable) -> io::Result<usize> {
         value.encode_variable(self)
@@ -255,5 +261,72 @@ mod tests {
 
         let rate = tracker.rate();
         assert_eq!(rate, 40.0); // 40 events in 1 second
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeDirection {
+    Backwards, // Past (default)
+    Forwards,  // Future
+}
+
+impl Default for TimeDirection {
+    fn default() -> Self {
+        TimeDirection::Backwards
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelativeDateTime {
+    duration: Duration,
+    direction: TimeDirection,
+}
+
+impl RelativeDateTime {
+    pub fn new(duration: Duration, direction: TimeDirection) -> Self {
+        Self {
+            duration,
+            direction,
+        }
+    }
+
+    pub fn ago(duration: Duration) -> Self {
+        Self::new(duration, TimeDirection::Backwards)
+    }
+
+    pub fn from_now(duration: Duration) -> Self {
+        let cur = get_time();
+        if duration > cur {
+            Self::new(duration - cur, TimeDirection::Forwards)
+        } else {
+            Self::new(cur - duration, TimeDirection::Backwards)
+        }
+    }
+}
+
+impl std::fmt::Display for RelativeDateTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secs = self.duration.as_secs();
+
+        if secs == 0 {
+            return write!(f, "now");
+        }
+
+        let (amount, unit) = match secs {
+            0 => unreachable!(), // handled above
+            1..=59 => (secs, "second"),
+            60..=3599 => (secs / 60, "minute"),
+            3600..=86399 => (secs / 3600, "hour"),
+            86400..=2591999 => (secs / 86400, "day"), // up to 29 days
+            2592000..=31535999 => (secs / 2592000, "month"), // 30 days to 364 days
+            _ => (secs / 31536000, "year"),           // 365 days+
+        };
+
+        let plural = if amount != 1 { "s" } else { "" };
+
+        match self.direction {
+            TimeDirection::Forwards => write!(f, "in {} {}{}", amount, unit, plural),
+            TimeDirection::Backwards => write!(f, "{} {}{} ago", amount, unit, plural),
+        }
     }
 }
