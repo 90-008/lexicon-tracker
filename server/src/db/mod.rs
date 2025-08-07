@@ -268,10 +268,6 @@ impl Db {
 
     pub fn major_compact(&self) -> AppResult<()> {
         self.compact_all(self.cfg.max_block_size, .., true)?;
-        let _guard = scc::ebr::Guard::new();
-        for (_, handle) in self.hits.iter(&_guard) {
-            handle.deref().major_compact()?;
-        }
         Ok(())
     }
 
