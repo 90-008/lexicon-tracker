@@ -183,7 +183,7 @@ async fn hits(
 
     for maybe_hit in maybe_hits {
         let hit = maybe_hit?;
-        let hit_data = hit.access();
+        let hit_data = hit.deser()?;
 
         hits.push(Hit {
             timestamp: hit.timestamp,

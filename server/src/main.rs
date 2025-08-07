@@ -291,7 +291,7 @@ fn migrate() {
                     EventRecord {
                         nsid: nsid.to_smolstr(),
                         timestamp: hit.timestamp,
-                        deleted: hit.access().deleted,
+                        deleted: hit.deser().unwrap().deleted,
                     }
                 }))
                 .expect("cant record event");

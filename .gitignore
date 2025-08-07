@@ -29,3 +29,5 @@ events.sqlite-shm
 
 result
 server/bsky_zstd_dictionary
+fjall_data*
+.fjall_data*

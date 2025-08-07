@@ -5,21 +5,34 @@ use std::{
 };
 
 use rkyv::{
-    Archive, Serialize, api::high::HighSerializer, rancor, ser::allocator::ArenaHandle,
+    Archive, Deserialize, Serialize,
+    api::high::{HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    de::Pool,
+    rancor::{self, Strategy},
+    ser::allocator::ArenaHandle,
     util::AlignedVec,
 };
 
-use crate::utils::{ReadVariableExt, WriteVariableExt};
+use crate::{
+    error::{AppError, AppResult},
+    utils::{ReadVariableExt, WriteVariableExt},
+};
 
 pub struct Item<T> {
     pub timestamp: u64,
-    data: AlignedVec,
+    pub data: AlignedVec,
     phantom: PhantomData<T>,
 }
 
-impl<T: Archive> Item<T> {
-    pub fn access(&self) -> &T::Archived {
-        unsafe { rkyv::access_unchecked::<T::Archived>(&self.data) }
+impl<T> Item<T>
+where
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, rancor::Error>>
+        + Deserialize<T, Strategy<Pool, rancor::Error>>,
+{
+    pub fn deser(&self) -> AppResult<T> {
+        rkyv::from_bytes(&self.data).map_err(AppError::from)
     }
 }
 
@@ -248,7 +261,7 @@ mod test {
         let decoded_item = decoder.decode().unwrap().unwrap();
         assert_eq!(decoded_item.timestamp, 1000);
 
-        let decoded_data = decoded_item.access();
+        let decoded_data = decoded_item.deser().unwrap();
         assert_eq!(decoded_data.id, 123);
         assert_eq!(decoded_data.value.as_str(), "test");
     }
@@ -308,10 +321,10 @@ mod test {
 
         for (original, decoded) in items.iter().zip(decoded_items.iter()) {
             assert_eq!(original.timestamp, decoded.timestamp);
-            assert_eq!(original.access().id, decoded.access().id);
+            assert_eq!(original.deser().unwrap().id, decoded.deser().unwrap().id);
             assert_eq!(
-                original.access().value.as_str(),
-                decoded.access().value.as_str()
+                original.deser().unwrap().value.as_str(),
+                decoded.deser().unwrap().value.as_str()
             );
         }
     }
@@ -363,9 +376,9 @@ mod test {
         assert_eq!(decoded_items[1].timestamp, 2005);
         assert_eq!(decoded_items[2].timestamp, 2012);
 
-        assert_eq!(decoded_items[0].access().id, 10);
-        assert_eq!(decoded_items[1].access().id, 20);
-        assert_eq!(decoded_items[2].access().id, 30);
+        assert_eq!(decoded_items[0].deser().unwrap().id, 10);
+        assert_eq!(decoded_items[1].deser().unwrap().id, 20);
+        assert_eq!(decoded_items[2].deser().unwrap().id, 30);
     }
 
     #[test]
@@ -418,7 +431,7 @@ mod test {
 
         for (original, decoded) in items.iter().zip(decoded_items.iter()) {
             assert_eq!(original.timestamp, decoded.timestamp);
-            assert_eq!(original.access().id, decoded.access().id);
+            assert_eq!(original.deser().unwrap().id, decoded.deser().unwrap().id);
         }
     }
 
@@ -498,8 +511,11 @@ mod test {
         let decoded_items = decoded_items.unwrap();
 
         assert_eq!(decoded_items.len(), 2);
-        assert_eq!(decoded_items[0].access().value.as_str(), "x");
-        assert_eq!(decoded_items[1].access().value.len(), 1000);
-        assert_eq!(decoded_items[1].access().value.as_str(), "a".repeat(1000));
+        assert_eq!(decoded_items[0].deser().unwrap().value.as_str(), "x");
+        assert_eq!(decoded_items[1].deser().unwrap().value.len(), 1000);
+        assert_eq!(
+            decoded_items[1].deser().unwrap().value.as_str(),
+            "a".repeat(1000)
+        );
     }
 }
