@@ -205,7 +205,7 @@ impl Db {
         data.into_par_iter()
             .map(|chunk| {
                 chunk
-                    .into_par_iter()
+                    .into_iter()
                     .map(|(i, handle, max_block_size)| {
                         (i, handle.take_block_items(max_block_size), handle)
                     })
