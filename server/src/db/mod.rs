@@ -97,7 +97,7 @@ impl DbConfig {
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
-            ks_config: fjall::Config::default(),
+            ks_config: fjall::Config::default().cache_size(1024 * 1024 * 512),
             min_block_size: 1000,
             max_block_size: 1_000_000,
             max_last_activity: Duration::from_secs(10),
