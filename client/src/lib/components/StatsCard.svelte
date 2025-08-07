@@ -1,6 +1,5 @@
 <script lang="ts">
     import { formatNumber } from "$lib/format";
-    import NumberFlow from "@number-flow/svelte";
 
     const colorClasses = {
         green: {
@@ -45,6 +44,6 @@
         {title}
     </h3>
     <p class="text-xl md:text-2xl font-bold {colors.valueText}">
-        <NumberFlow {value} />
+        {formatNumber(value)}
     </p>
 </div>
