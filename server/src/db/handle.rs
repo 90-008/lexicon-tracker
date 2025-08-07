@@ -57,8 +57,8 @@ impl Deref for LexiconHandle {
 impl LexiconHandle {
     pub fn new(keyspace: &Keyspace, nsid: &str) -> Self {
         let opts = PartitionCreateOptions::default()
-            .block_size(1024 * 32)
-            .compression(fjall::CompressionType::None);
+            .block_size(1024 * 128)
+            .compression(fjall::CompressionType::Miniz(9));
         Self {
             tree: keyspace.open_partition(nsid, opts).unwrap(),
             nsid: nsid.into(),
