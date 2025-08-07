@@ -218,19 +218,18 @@ impl LexiconHandle {
         Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "no items are in queue").into())
     }
 
-    pub fn encode_block(&self, item_count: usize) -> AppResult<Block> {
+    pub fn take_block_items(&self, item_count: usize) -> Vec<Item> {
         let mut buf = self.buf.lock();
         let end = item_count.min(buf.len());
-        Self::encode_block_from_items(
-            buf.drain(..end).map(|event| {
+        buf.drain(..end)
+            .map(|event| {
                 Item::new(
                     event.timestamp,
                     &NsidHit {
                         deleted: event.deleted,
                     },
                 )
-            }),
-            item_count,
-        )
+            })
+            .collect()
     }
 }

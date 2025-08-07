@@ -207,16 +207,19 @@ impl Db {
                 chunk
                     .into_iter()
                     .map(|(i, handle, max_block_size)| {
-                        handle
-                            .encode_block(max_block_size)
-                            .inspect(|block| {
-                                tracing::info!(
-                                    "{}: encoded block with {} items",
-                                    handle.nsid(),
-                                    block.written,
-                                )
-                            })
-                            .map(|block| (i, block, handle))
+                        (i, handle.take_block_items(max_block_size), handle)
+                    })
+                    .collect::<Vec<_>>()
+                    .into_par_iter()
+                    .map(|(i, items, handle)| {
+                        let count = items.len();
+                        let block = LexiconHandle::encode_block_from_items(items, count)?;
+                        tracing::info!(
+                            "{}: encoded block with {} items",
+                            handle.nsid(),
+                            block.written,
+                        );
+                        AppResult::Ok((i, block, handle))
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
