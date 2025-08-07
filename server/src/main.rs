@@ -53,10 +53,6 @@ async fn main() {
             debug();
             return;
         }
-        Some("traindict") => {
-            train_zstd_dict();
-            return;
-        }
         Some(x) => {
             tracing::error!("unknown command: {}", x);
             return;
@@ -211,12 +207,6 @@ async fn main() {
     db.sync(true).expect("cant sync db");
 }
 
-fn train_zstd_dict() {
-    let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
-    let dict_data = db.train_zstd_dict().expect("cant train zstd dict");
-    std::fs::write("zstd_dict", dict_data).expect("cant save zstd dict")
-}
-
 fn debug() {
     let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
     let info = db.info().expect("cant get db info");
@@ -246,6 +236,8 @@ fn compact() {
         DbConfig::default().ks(|c| {
             c.max_journaling_size(u64::MAX)
                 .max_write_buffer_size(u64::MAX)
+                .compaction_workers(rayon::current_num_threads() * 4)
+                .flush_workers(rayon::current_num_threads() * 4)
         }),
         CancellationToken::new(),
     )
@@ -269,6 +261,7 @@ fn compact() {
 
 fn migrate() {
     let cancel_token = CancellationToken::new();
+
     let from = Arc::new(
         Db::new(
             DbConfig::default().path(".fjall_data_from"),
@@ -276,6 +269,13 @@ fn migrate() {
         )
         .expect("couldnt create db"),
     );
+    #[cfg(feature = "compress")]
+    std::fs::write(
+        "zstd_dict",
+        from.train_zstd_dict().expect("cant get zstd dict"),
+    )
+    .expect("cant write zstd dict");
+
     let to = Arc::new(
         Db::new(
             DbConfig::default().path(".fjall_data_to").ks(|c| {
@@ -290,7 +290,7 @@ fn migrate() {
     );
 
     let nsids = from.get_nsids().collect::<Vec<_>>();
-    let eps_thread = std::thread::spawn({
+    let _eps_thread = std::thread::spawn({
         let to = to.clone();
         move || {
             loop {

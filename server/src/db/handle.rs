@@ -14,15 +14,41 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rclite::Arc;
 use smol_str::SmolStr;
 
+#[cfg(feature = "compress")]
+use zstd::bulk::{Compressor as ZstdCompressor, Decompressor as ZstdDecompressor};
+
 use crate::{
     db::{EventRecord, NsidHit, block},
     error::AppResult,
     utils::{CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt, varints_unsigned_encoded},
 };
 
-pub type ItemDecoder = block::ItemDecoder<Cursor<Slice>, NsidHit>;
-pub type ItemEncoder = block::ItemEncoder<Vec<u8>, NsidHit>;
+#[cfg(feature = "compress")]
+thread_local! {
+    static COMPRESSOR: std::cell::RefCell<Option<ZstdCompressor<'static>>> = std::cell::RefCell::new(None);
+    static DECOMPRESSOR: std::cell::RefCell<Option<ZstdDecompressor<'static>>> = std::cell::RefCell::new(None);
+}
+
+type ItemDecoder = block::ItemDecoder<Cursor<Vec<u8>>, NsidHit>;
+type ItemEncoder = block::ItemEncoder<Vec<u8>, NsidHit>;
 pub type Item = block::Item<NsidHit>;
+
+#[derive(Clone)]
+pub enum Compression {
+    None,
+    #[cfg(feature = "compress")]
+    Zstd(ByteView),
+}
+
+impl Compression {
+    #[cfg(feature = "compress")]
+    fn get_dict(&self) -> Option<&ByteView> {
+        match self {
+            Compression::None => None,
+            Compression::Zstd(dict) => Some(dict),
+        }
+    }
+}
 
 pub struct Block {
     pub written: usize,
@@ -36,6 +62,7 @@ pub struct LexiconHandle {
     buf: Arc<Mutex<Vec<EventRecord>>>,
     last_insert: AtomicU64, // relaxed
     eps: DefaultRateTracker,
+    compress: Compression,
 }
 
 impl Debug for LexiconHandle {
@@ -55,17 +82,65 @@ impl Deref for LexiconHandle {
 }
 
 impl LexiconHandle {
-    pub fn new(keyspace: &Keyspace, nsid: &str) -> Self {
+    pub fn new(keyspace: &Keyspace, nsid: &str, compress: Compression) -> Self {
         let opts = PartitionCreateOptions::default()
             .block_size(1024 * 128)
-            .compression(fjall::CompressionType::Miniz(9));
+            .compression(fjall::CompressionType::Lz4);
         Self {
             tree: keyspace.open_partition(nsid, opts).unwrap(),
             nsid: nsid.into(),
             buf: Default::default(),
             last_insert: AtomicU64::new(0),
             eps: RateTracker::new(Duration::from_secs(10)),
+            compress,
         }
+    }
+
+    #[cfg(feature = "compress")]
+    fn with_compressor<T>(&self, mut f: impl FnMut(&mut ZstdCompressor<'static>) -> T) -> T {
+        COMPRESSOR.with_borrow_mut(|compressor| {
+            if compressor.is_none() {
+                *compressor = Some({
+                    let mut c = ZstdCompressor::new(9).expect("cant construct zstd compressor");
+                    c.include_checksum(false).unwrap();
+                    if let Some(dict) = self.compress.get_dict() {
+                        c.set_dictionary(9, dict).expect("cant set dict");
+                    }
+                    c
+                });
+            }
+            // SAFETY: this is safe because we just initialized the compressor
+            f(unsafe { compressor.as_mut().unwrap_unchecked() })
+        })
+    }
+
+    #[cfg(feature = "compress")]
+    pub fn compress(&self, data: impl AsRef<[u8]>) -> std::io::Result<Vec<u8>> {
+        self.with_compressor(|compressor| compressor.compress(data.as_ref()))
+    }
+
+    #[cfg(feature = "compress")]
+    fn with_decompressor<T>(&self, mut f: impl FnMut(&mut ZstdDecompressor<'static>) -> T) -> T {
+        DECOMPRESSOR.with_borrow_mut(|decompressor| {
+            if decompressor.is_none() {
+                *decompressor = Some({
+                    let mut d = ZstdDecompressor::new().expect("cant construct zstd decompressor");
+                    if let Some(dict) = self.compress.get_dict() {
+                        d.set_dictionary(dict).expect("cant set dict");
+                    }
+                    d
+                });
+            }
+            // SAFETY: this is safe because we just initialized the decompressor
+            f(unsafe { decompressor.as_mut().unwrap_unchecked() })
+        })
+    }
+
+    #[cfg(feature = "compress")]
+    pub fn decompress(&self, data: impl AsRef<[u8]>) -> std::io::Result<Vec<u8>> {
+        self.with_decompressor(|decompressor| {
+            decompressor.decompress(data.as_ref(), 1024 * 1024 * 20)
+        })
     }
 
     pub fn nsid(&self) -> &SmolStr {
@@ -123,14 +198,16 @@ impl LexiconHandle {
         }
 
         let start_blocks_size = blocks_to_compact.len();
-        let keys_to_delete = blocks_to_compact.iter().map(|(key, _)| key);
+        let keys_to_delete = blocks_to_compact
+            .iter()
+            .map(|(key, _)| key)
+            .cloned()
+            .collect_vec();
         let mut all_items =
             blocks_to_compact
-                .iter()
+                .into_iter()
                 .try_fold(Vec::new(), |mut acc, (key, value)| {
-                    let mut timestamps = Cursor::new(key);
-                    let start_timestamp = timestamps.read_varint()?;
-                    let decoder = block::ItemDecoder::new(Cursor::new(value), start_timestamp)?;
+                    let decoder = self.get_decoder_for(key, value)?;
                     let mut items = decoder.collect::<Result<Vec<_>, _>>()?;
                     acc.append(&mut items);
                     AppResult::Ok(acc)
@@ -149,7 +226,7 @@ impl LexiconHandle {
             .into_par_iter()
             .map(|chunk| {
                 let count = chunk.len();
-                Self::encode_block_from_items(chunk, count)
+                self.encode_block_from_items(chunk, count)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let end_blocks_size = new_blocks.len();
@@ -173,6 +250,7 @@ impl LexiconHandle {
     }
 
     pub fn encode_block_from_items(
+        &self,
         items: impl IntoIterator<Item = Item>,
         count: usize,
     ) -> AppResult<Block> {
@@ -204,13 +282,9 @@ impl LexiconHandle {
             .into());
         }
         if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
-            let value = writer.finish()?;
+            let data = self.put_raw_block(writer.finish()?)?;
             let key = varints_unsigned_encoded([start_timestamp, end_timestamp]);
-            return Ok(Block {
-                written,
-                key,
-                data: value,
-            });
+            return Ok(Block { written, key, data });
         }
         Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "no items are in queue").into())
     }
@@ -228,5 +302,28 @@ impl LexiconHandle {
                 )
             })
             .collect()
+    }
+
+    pub fn get_raw_block(&self, value: Slice) -> std::io::Result<Vec<u8>> {
+        match &self.compress {
+            Compression::None => Ok(value.as_ref().into()),
+            #[cfg(feature = "compress")]
+            Compression::Zstd(_) => self.decompress(value),
+        }
+    }
+
+    pub fn put_raw_block(&self, value: Vec<u8>) -> std::io::Result<Vec<u8>> {
+        match &self.compress {
+            Compression::None => Ok(value),
+            #[cfg(feature = "compress")]
+            Compression::Zstd(_) => self.compress(value),
+        }
+    }
+
+    pub fn get_decoder_for(&self, key: Slice, value: Slice) -> AppResult<ItemDecoder> {
+        let mut timestamps = Cursor::new(key);
+        let start_timestamp = timestamps.read_varint()?;
+        let decoder = ItemDecoder::new(Cursor::new(self.get_raw_block(value)?), start_timestamp)?;
+        Ok(decoder)
     }
 }
