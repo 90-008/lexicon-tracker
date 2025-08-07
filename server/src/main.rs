@@ -257,9 +257,8 @@ fn migrate() {
     let to = Arc::new(
         Db::new(
             DbConfig::default().path(".fjall_data_to").ks(|c| {
-                c.max_journaling_size(1024 * 1024 * 1024 * 8)
+                c.max_journaling_size(u64::MAX)
                     .max_write_buffer_size(u64::MAX)
-                    .manual_journal_persist(true)
             }),
             cancel_token.child_token(),
         )
@@ -311,9 +310,6 @@ fn migrate() {
     tracing::info!("starting sync!!!");
     to.sync(true).expect("cant sync");
     tracing::info!("persisting...");
-    to.ks
-        .persist(fjall::PersistMode::SyncAll)
-        .expect("cant persist");
     let total_time = start.elapsed();
     let write_per_second = total_count as f64 / (total_time - read_time).as_secs_f64();
     tracing::info!(
