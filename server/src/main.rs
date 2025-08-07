@@ -269,10 +269,10 @@ fn migrate() {
     let to = Arc::new(
         Db::new(
             DbConfig::default().path(".fjall_data_to").ks(|c| {
-                c.max_journaling_size(1024 * 1024 * 1024 * 8)
+                c.max_journaling_size(u64::MAX)
                     .max_write_buffer_size(u64::MAX)
-                    .compaction_workers(rayon::current_num_threads() * 2)
-                    .flush_workers(rayon::current_num_threads() * 2)
+                    .compaction_workers(rayon::current_num_threads() * 4)
+                    .flush_workers(rayon::current_num_threads() * 4)
             }),
             cancel_token.child_token(),
         )
