@@ -17,6 +17,7 @@ use crate::{
 
 mod api;
 mod db;
+mod db_old;
 mod error;
 mod jetstream;
 mod utils;
@@ -259,13 +260,9 @@ fn compact() {
 
 fn migrate() {
     let cancel_token = CancellationToken::new();
-    let from = Arc::new(
-        Db::new(
-            DbConfig::default().path(".fjall_data_from"),
-            cancel_token.child_token(),
-        )
-        .expect("couldnt create db"),
-    );
+
+    let from = Arc::new(db_old::Db::new(".fjall_data_from").expect("couldnt create db"));
+
     let to = Arc::new(
         Db::new(
             DbConfig::default().path(".fjall_data_to").ks(|c| {
