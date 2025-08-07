@@ -227,7 +227,14 @@ fn debug() {
 }
 
 fn compact() {
-    let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
+    let db = Db::new(
+        DbConfig::default().ks(|c| {
+            c.max_journaling_size(u64::MAX)
+                .max_write_buffer_size(u64::MAX)
+        }),
+        CancellationToken::new(),
+    )
+    .expect("couldnt create db");
     let info = db.info().expect("cant get db info");
     db.major_compact().expect("cant compact");
     std::thread::sleep(Duration::from_secs(5));
