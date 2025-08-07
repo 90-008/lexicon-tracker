@@ -85,10 +85,13 @@ impl LexiconHandle {
         self.eps.rate() as usize * 60
     }
 
-    pub fn queue(&self, event: EventRecord) {
-        self.buf.lock().push(event);
+    pub fn queue(&self, events: impl IntoIterator<Item = EventRecord>) {
+        let mut count = 0;
+        self.buf.lock().extend(events.into_iter().inspect(|_| {
+            count += 1;
+        }));
         self.last_insert.store(CLOCK.raw(), AtomicOrdering::Relaxed);
-        self.eps.observe();
+        self.eps.observe(count);
     }
 
     pub fn compact(
@@ -174,6 +177,13 @@ impl LexiconHandle {
         items: impl IntoIterator<Item = Item>,
         count: usize,
     ) -> AppResult<Block> {
+        if count == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "no items requested",
+            )
+            .into());
+        }
         let mut writer = ItemEncoder::new(
             WritableByteView::with_size(ItemEncoder::encoded_len(count)),
             count,
@@ -181,16 +191,20 @@ impl LexiconHandle {
         let mut start_timestamp = None;
         let mut end_timestamp = None;
         let mut written = 0_usize;
-        for item in items {
+        for item in items.into_iter().take(count) {
             writer.encode(&item)?;
             if start_timestamp.is_none() {
                 start_timestamp = Some(item.timestamp);
             }
             end_timestamp = Some(item.timestamp);
-            if written >= count {
-                break;
-            }
             written += 1;
+        }
+        if written != count {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unexpected number of items, invalid data?",
+            )
+            .into());
         }
         if let (Some(start_timestamp), Some(end_timestamp)) = (start_timestamp, end_timestamp) {
             let value = writer.finish()?;
@@ -205,8 +219,10 @@ impl LexiconHandle {
     }
 
     pub fn encode_block(&self, item_count: usize) -> AppResult<Block> {
-        let block = Self::encode_block_from_items(
-            self.buf.lock().drain(..).map(|event| {
+        let mut buf = self.buf.lock();
+        let end = item_count.min(buf.len());
+        Self::encode_block_from_items(
+            buf.drain(..end).map(|event| {
                 Item::new(
                     event.timestamp,
                     &NsidHit {
@@ -215,14 +231,6 @@ impl LexiconHandle {
                 )
             }),
             item_count,
-        )?;
-        if block.written != item_count {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "unexpected number of items, invalid data?",
-            )
-            .into());
-        }
-        Ok(block)
+        )
     }
 }

@@ -143,7 +143,7 @@ impl Db {
             // if we disconnect for a long time, we want to sync all of what we
             // have to avoid having many small blocks (even if we run compaction
             // later, it reduces work until we run compaction)
-            let block_size = is_too_old
+            let block_size = (is_too_old || all)
                 .then_some(self.max_block_size)
                 .unwrap_or_else(|| {
                     self.max_block_size
@@ -264,34 +264,24 @@ impl Db {
     pub fn ingest_events(&self, events: impl Iterator<Item = EventRecord>) -> AppResult<()> {
         for (key, chunk) in events.chunk_by(|event| event.nsid.clone()).into_iter() {
             let mut counts = self.get_count(&key)?;
-            let handle = self.ensure_handle(&key);
-            for event in chunk {
-                let EventRecord {
-                    timestamp, deleted, ..
-                } = event.clone();
-
-                handle.queue(event);
-
+            let mut count = 0;
+            self.ensure_handle(&key).queue(chunk.inspect(|e| {
                 // increment count
-                counts.last_seen = timestamp;
-                if deleted {
+                counts.last_seen = e.timestamp;
+                if e.deleted {
                     counts.deleted_count += 1;
                 } else {
                     counts.count += 1;
                 }
-
-                self.eps.observe();
-            }
+                count += 1;
+            }));
+            self.eps.observe(count);
             self.insert_count(&key, &counts)?;
             if self.event_broadcaster.receiver_count() > 0 {
                 let _ = self.event_broadcaster.send((key, counts));
             }
         }
         Ok(())
-    }
-
-    pub fn record_event(&self, e: EventRecord) -> AppResult<()> {
-        self.ingest_events(std::iter::once(e))
     }
 
     #[inline(always)]

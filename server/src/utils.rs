@@ -150,11 +150,11 @@ impl<const BUCKET_WINDOW: u64> RateTracker<BUCKET_WINDOW> {
     }
 
     /// record an event
-    pub fn observe(&self) {
+    pub fn observe(&self, count: u64) {
         self.maybe_advance_buckets();
 
         let bucket_index = self.get_current_bucket_index();
-        self.buckets[bucket_index].fetch_add(1, Ordering::Relaxed);
+        self.buckets[bucket_index].fetch_add(count, Ordering::Relaxed);
     }
 
     /// get the current rate in events per second
@@ -219,9 +219,7 @@ mod tests {
         let tracker = DefaultRateTracker::new(Duration::from_secs(2));
 
         // record some events
-        tracker.observe();
-        tracker.observe();
-        tracker.observe();
+        tracker.observe(3);
 
         let rate = tracker.rate();
         assert_eq!(rate, 1.5); // 3 events over 2 seconds = 1.5 events/sec
@@ -232,9 +230,7 @@ mod tests {
         let tracker = DefaultRateTracker::new(Duration::from_secs(1));
 
         // record a lot of events
-        for _ in 0..1000 {
-            tracker.observe();
-        }
+        tracker.observe(1000);
 
         let rate = tracker.rate();
         assert_eq!(rate, 1000.0); // 1000 events in 1 second
@@ -248,9 +244,7 @@ mod tests {
         for _ in 0..4 {
             let tracker_clone = Arc::clone(&tracker);
             let handle = thread::spawn(move || {
-                for _ in 0..10 {
-                    tracker_clone.observe();
-                }
+                tracker_clone.observe(10);
             });
             handles.push(handle);
         }

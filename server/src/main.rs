@@ -1,5 +1,6 @@
 use std::{ops::Deref, time::Duration};
 
+use itertools::Itertools;
 use rclite::Arc;
 use smol_str::ToSmolStr;
 use tokio_util::sync::CancellationToken;
@@ -252,25 +253,36 @@ fn migrate() {
         Arc::new(Db::new(".fjall_data_to", cancel_token.child_token()).expect("couldnt create db"));
 
     let nsids = from.get_nsids().collect::<Vec<_>>();
+    let eps_thread = std::thread::spawn({
+        let to = to.clone();
+        move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(3));
+                tracing::info!("{} rps", to.eps());
+            }
+        }
+    });
     let mut threads = Vec::with_capacity(nsids.len());
     let start = CLOCK.now();
     for nsid in nsids {
         let from = from.clone();
         let to = to.clone();
         threads.push(std::thread::spawn(move || {
-            tracing::info!("migrating {} ...", nsid.deref());
+            tracing::info!("{}: migrating...", nsid.deref());
             let mut count = 0_u64;
-            for hit in from.get_hits(&nsid, ..) {
-                let hit = hit.expect("cant read event");
-                let data = hit.access();
-                to.record_event(EventRecord {
-                    nsid: nsid.to_smolstr(),
-                    timestamp: hit.timestamp,
-                    deleted: data.deleted,
-                })
+            for hits in from.get_hits(&nsid, ..).chunks(100000).into_iter() {
+                to.ingest_events(hits.map(|hit| {
+                    count += 1;
+                    let hit = hit.expect("cant decode hit");
+                    EventRecord {
+                        nsid: nsid.to_smolstr(),
+                        timestamp: hit.timestamp,
+                        deleted: hit.access().deleted,
+                    }
+                }))
                 .expect("cant record event");
-                count += 1;
             }
+            tracing::info!("{}: ingested {} events...", nsid.deref(), count);
             count
         }));
     }
