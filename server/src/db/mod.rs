@@ -175,7 +175,6 @@ impl Db {
         drop(_guard);
 
         // process the blocks
-        let mut blocks = Vec::with_capacity(data.len());
         data.into_par_iter()
             .map(|chunk| {
                 chunk
@@ -194,21 +193,19 @@ impl Db {
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
-            .collect_into_vec(&mut blocks);
-
-        // execute into db
-        for chunk in blocks.into_iter() {
-            let chunk = chunk?;
-            for (i, block, handle) in chunk {
-                self.sync_pool
-                    .execute(move || match handle.insert(block.key, block.data) {
-                        Ok(_) => {
-                            tracing::info!("{}: [{i}] synced {}", block.written, handle.nsid())
-                        }
-                        Err(err) => tracing::error!("failed to sync block: {}", err),
-                    });
-            }
-        }
+            .try_for_each(|chunk| {
+                let chunk = chunk?;
+                for (i, block, handle) in chunk {
+                    self.sync_pool
+                        .execute(move || match handle.insert(block.key, block.data) {
+                            Ok(_) => {
+                                tracing::info!("{}: [{i}] synced {}", block.written, handle.nsid())
+                            }
+                            Err(err) => tracing::error!("failed to sync block: {}", err),
+                        });
+                }
+                AppResult::Ok(())
+            })?;
         self.sync_pool.join();
 
         Ok(())
