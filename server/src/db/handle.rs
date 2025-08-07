@@ -76,8 +76,10 @@ impl LexiconHandle {
         self.buf.lock().len()
     }
 
-    pub fn since_last_activity(&self) -> u64 {
-        CLOCK.delta_as_nanos(self.last_insert.load(AtomicOrdering::Relaxed), CLOCK.raw())
+    pub fn since_last_activity(&self) -> Duration {
+        Duration::from_nanos(
+            CLOCK.delta_as_nanos(self.last_insert.load(AtomicOrdering::Relaxed), CLOCK.raw()),
+        )
     }
 
     pub fn suggested_block_size(&self) -> usize {

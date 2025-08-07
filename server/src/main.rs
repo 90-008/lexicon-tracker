@@ -280,7 +280,7 @@ fn migrate() {
     );
 
     let nsids = from.get_nsids().collect::<Vec<_>>();
-    let eps_thread = std::thread::spawn({
+    let _eps_thread = std::thread::spawn({
         let to = to.clone();
         move || {
             loop {

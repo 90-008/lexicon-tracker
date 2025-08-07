@@ -3,14 +3,14 @@ use std::{
     fmt::Debug,
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
-    path::{Path, PathBuf},
+    path::Path,
     time::Duration,
 };
 
 use byteview::StrView;
-use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
+use fjall::{Keyspace, Partition, PartitionCreateOptions};
 use itertools::{Either, Itertools};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rclite::Arc;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::{SmolStr, ToSmolStr};
@@ -79,7 +79,7 @@ pub struct DbConfig {
     pub ks_config: fjall::Config,
     pub min_block_size: usize,
     pub max_block_size: usize,
-    pub max_last_activity: u64,
+    pub max_last_activity: Duration,
 }
 
 impl DbConfig {
@@ -98,9 +98,9 @@ impl Default for DbConfig {
     fn default() -> Self {
         Self {
             ks_config: fjall::Config::default(),
-            min_block_size: 512,
-            max_block_size: 500_000,
-            max_last_activity: Duration::from_secs(10).as_nanos() as u64,
+            min_block_size: 1000,
+            max_block_size: 1_000_000,
+            max_last_activity: Duration::from_secs(10),
         }
     }
 }
@@ -114,7 +114,7 @@ pub struct Db {
     hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
     sync_pool: threadpool::ThreadPool,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
-    eps: RateTracker<100>,
+    eps: RateTracker<100>, // 100 millis buckets
     cancel_token: CancellationToken,
 }
 
@@ -229,7 +229,7 @@ impl Db {
                     self.sync_pool
                         .execute(move || match handle.insert(block.key, block.data) {
                             Ok(_) => {
-                                tracing::info!("{}: [{i}] synced {}", block.written, handle.nsid())
+                                tracing::info!("{}: [{i}] synced {}", handle.nsid(), block.written)
                             }
                             Err(err) => tracing::error!("failed to sync block: {}", err),
                         });
