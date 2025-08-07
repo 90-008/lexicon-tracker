@@ -17,20 +17,17 @@ use smol_str::SmolStr;
 use crate::{
     db::{EventRecord, NsidHit, block},
     error::AppResult,
-    utils::{
-        CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt, WritableByteView,
-        varints_unsigned_encoded,
-    },
+    utils::{CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt, varints_unsigned_encoded},
 };
 
 pub type ItemDecoder = block::ItemDecoder<Cursor<Slice>, NsidHit>;
-pub type ItemEncoder = block::ItemEncoder<WritableByteView, NsidHit>;
+pub type ItemEncoder = block::ItemEncoder<Vec<u8>, NsidHit>;
 pub type Item = block::Item<NsidHit>;
 
 pub struct Block {
     pub written: usize,
     pub key: ByteView,
-    pub data: ByteView,
+    pub data: Vec<u8>,
 }
 
 pub struct LexiconHandle {
@@ -184,10 +181,8 @@ impl LexiconHandle {
             )
             .into());
         }
-        let mut writer = ItemEncoder::new(
-            WritableByteView::with_size(ItemEncoder::encoded_len(count)),
-            count,
-        );
+        let mut writer =
+            ItemEncoder::new(Vec::with_capacity(ItemEncoder::encoded_len(count)), count);
         let mut start_timestamp = None;
         let mut end_timestamp = None;
         let mut written = 0_usize;
@@ -212,7 +207,7 @@ impl LexiconHandle {
             return Ok(Block {
                 written,
                 key,
-                data: value.into_inner(),
+                data: value,
             });
         }
         Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "no items are in queue").into())
