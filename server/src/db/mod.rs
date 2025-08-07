@@ -5,6 +5,7 @@ use std::{
     ops::{Bound, Deref, RangeBounds},
     path::Path,
     time::Duration,
+    u64,
 };
 
 use byteview::StrView;
@@ -97,7 +98,9 @@ impl DbConfig {
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
-            ks_config: fjall::Config::default().cache_size(1024 * 1024 * 512),
+            ks_config: fjall::Config::default()
+                .cache_size(1024 * 1024 * 512)
+                .max_write_buffer_size(u64::MAX),
             min_block_size: 1000,
             max_block_size: 250_000,
             max_last_activity: Duration::from_secs(10),
