@@ -380,25 +380,6 @@ impl Db {
         })
     }
 
-    // train zstd dict with 100 blocks from every lexicon
-    pub fn train_zstd_dict(&self) -> AppResult<Vec<u8>> {
-        let samples = self
-            .get_nsids()
-            .filter_map(|nsid| self.get_handle(&nsid))
-            .map(|handle| {
-                handle
-                    .iter()
-                    .rev()
-                    .map(|res| {
-                        res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-                            .map(|(_, value)| Cursor::new(value))
-                    })
-                    .take(1000)
-            })
-            .flatten();
-        zstd::dict::from_sample_iterator(samples, 1024 * 128).map_err(AppError::from)
-    }
-
     pub fn get_hits(
         &self,
         nsid: &str,

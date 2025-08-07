@@ -30,7 +30,6 @@ byteview = "0.6.1"
 rayon = "1.10.0"
 parking_lot = { version = "0.12", features = ["send_guard", "hardware-lock-elision"] }
 rclite = "0.2.7"
-zstd = "0.13.3"
 
 [target.'cfg(target_env = "msvc")'.dependencies]
 snmalloc-rs = "0.3.8"

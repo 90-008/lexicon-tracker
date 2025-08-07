@@ -53,10 +53,6 @@ async fn main() {
             debug();
             return;
         }
-        Some("traindict") => {
-            train_zstd_dict();
-            return;
-        }
         Some(x) => {
             tracing::error!("unknown command: {}", x);
             return;
@@ -209,12 +205,6 @@ async fn main() {
     ingest_events.join().expect("failed to join ingest events");
     db_task.await.expect("cant join db task");
     db.sync(true).expect("cant sync db");
-}
-
-fn train_zstd_dict() {
-    let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
-    let dict_data = db.train_zstd_dict().expect("cant train zstd dict");
-    std::fs::write("zstd_dict", dict_data).expect("cant save zstd dict")
 }
 
 fn debug() {
