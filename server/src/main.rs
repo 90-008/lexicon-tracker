@@ -295,7 +295,10 @@ fn migrate() {
         move || {
             loop {
                 std::thread::sleep(Duration::from_secs(3));
-                tracing::info!("{} rps", to.eps());
+                let eps = to.eps();
+                if eps > 0 {
+                    tracing::info!("{} rps", eps);
+                }
             }
         }
     });
