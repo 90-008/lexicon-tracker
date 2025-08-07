@@ -21,7 +21,7 @@ use crate::{
     db::handle::{ItemDecoder, LexiconHandle},
     error::{AppError, AppResult},
     jetstream::JetstreamEvent,
-    utils::{RateTracker, ReadVariableExt, varints_unsigned_encoded},
+    utils::{CLOCK, RateTracker, ReadVariableExt, varints_unsigned_encoded},
 };
 
 mod block;
@@ -160,6 +160,7 @@ impl Db {
     }
 
     pub fn sync(&self, all: bool) -> AppResult<()> {
+        let start = CLOCK.now();
         // prepare all the data
         let mut data = Vec::with_capacity(self.hits.len());
         let _guard = scc::ebr::Guard::new();
@@ -180,22 +181,21 @@ impl Db {
             let count = handle.item_count();
             let data_count = count / block_size;
             if count > 0 && (all || data_count > 0 || is_too_old) {
-                for i in 0..data_count {
-                    nsid_data.push((i, handle.clone(), block_size));
+                for _ in 0..data_count {
+                    nsid_data.push((handle.clone(), block_size));
                     total_count += block_size;
                 }
                 // only sync remainder if we haven't met block size
                 let remainder = count % block_size;
                 if (all || data_count == 0) && remainder > 0 {
-                    nsid_data.push((data_count, handle.clone(), remainder));
+                    nsid_data.push((handle.clone(), remainder));
                     total_count += remainder;
                 }
             }
+            let _span = handle.span().entered();
             tracing::info!(
-                "{}: will sync {} blocks ({} count)",
-                handle.nsid(),
-                nsid_data.len(),
-                total_count,
+                {blocks = %nsid_data.len(), count = %total_count},
+                "will encode & sync",
             );
             data.push(nsid_data);
         }
@@ -206,37 +206,35 @@ impl Db {
             .map(|chunk| {
                 chunk
                     .into_iter()
-                    .map(|(i, handle, max_block_size)| {
-                        (i, handle.take_block_items(max_block_size), handle)
+                    .map(|(handle, max_block_size)| {
+                        (handle.take_block_items(max_block_size), handle)
                     })
                     .collect::<Vec<_>>()
                     .into_par_iter()
-                    .map(|(i, items, handle)| {
+                    .map(|(items, handle)| {
                         let count = items.len();
                         let block = LexiconHandle::encode_block_from_items(items, count)?;
-                        tracing::info!(
-                            "{}: encoded block with {} items",
-                            handle.nsid(),
-                            block.written,
-                        );
-                        AppResult::Ok((i, block, handle))
+                        AppResult::Ok((block, handle))
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
             .try_for_each(|chunk| {
                 let chunk = chunk?;
-                for (i, block, handle) in chunk {
-                    self.sync_pool
-                        .execute(move || match handle.insert(block.key, block.data) {
+                for (block, handle) in chunk {
+                    self.sync_pool.execute(move || {
+                        let _span = handle.span().entered();
+                        match handle.insert(block.key, block.data) {
                             Ok(_) => {
-                                tracing::info!("{}: [{i}] synced {}", handle.nsid(), block.written)
+                                tracing::info!({count = %block.written}, "synced")
                             }
-                            Err(err) => tracing::error!("failed to sync block: {}", err),
-                        });
+                            Err(err) => tracing::error!({ err = %err }, "failed to sync block"),
+                        }
+                    });
                 }
                 AppResult::Ok(())
             })?;
         self.sync_pool.join();
+        tracing::info!(time = %start.elapsed().as_secs_f64(), "synced all blocks");
 
         Ok(())
     }

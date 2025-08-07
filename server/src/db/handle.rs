@@ -68,6 +68,10 @@ impl LexiconHandle {
         }
     }
 
+    pub fn span(&self) -> tracing::Span {
+        tracing::info_span!("handle", nsid = %self.nsid)
+    }
+
     pub fn nsid(&self) -> &SmolStr {
         &self.nsid
     }
@@ -101,6 +105,8 @@ impl LexiconHandle {
         range: impl RangeBounds<u64>,
         sort: bool,
     ) -> AppResult<()> {
+        let _span = self.span().entered();
+
         let start_limit = match range.start_bound().cloned() {
             Bound::Included(start) => start,
             Bound::Excluded(start) => start.saturating_add(1),
@@ -120,7 +126,6 @@ impl LexiconHandle {
             .range(start_key..end_key)
             .collect::<Result<Vec<_>, _>>()?;
         if blocks_to_compact.len() < 2 {
-            tracing::info!("{}: nothing to compact", self.nsid);
             return Ok(());
         }
 
@@ -163,12 +168,14 @@ impl LexiconHandle {
             self.tree.insert(block.key, block.data)?;
         }
 
+        let reduction =
+            ((start_blocks_size - end_blocks_size) as f64 / start_blocks_size as f64) * 100.0;
         tracing::info!(
-            "{}: compacted {} blocks to {} blocks ({}% reduction)",
-            self.nsid,
-            start_blocks_size,
-            end_blocks_size,
-            ((start_blocks_size - end_blocks_size) as f64 / start_blocks_size as f64) * 100.0,
+            {
+                start = start_blocks_size,
+                end = end_blocks_size,
+            },
+            "blocks compacted {reduction:.2}%",
         );
 
         Ok(())
