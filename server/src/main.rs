@@ -293,6 +293,8 @@ fn migrate() {
     }
     let read_time = start.elapsed();
     let read_per_second = total_count as f64 / read_time.as_secs_f64();
+    drop(from);
+    tracing::info!("starting sync!!!");
     to.sync(true).expect("cant sync");
     let total_time = start.elapsed();
     let write_per_second = total_count as f64 / (total_time - read_time).as_secs_f64();
