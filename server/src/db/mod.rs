@@ -193,11 +193,13 @@ impl Db {
                 }
             }
             let _span = handle.span().entered();
-            tracing::info!(
-                {blocks = %nsid_data.len(), count = %total_count},
-                "will encode & sync",
-            );
-            data.push(nsid_data);
+            if nsid_data.len() > 0 {
+                tracing::info!(
+                    {blocks = %nsid_data.len(), count = %total_count},
+                    "will encode & sync",
+                );
+                data.push(nsid_data);
+            }
         }
         drop(_guard);
 
