@@ -1,4 +1,4 @@
-use std::{ops::Deref, time::Duration};
+use std::{ops::Deref, time::Duration, u64};
 
 use itertools::Itertools;
 use rclite::Arc;
@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     api::serve,
-    db::{Db, EventRecord},
+    db::{Db, DbConfig, EventRecord},
     error::AppError,
     jetstream::JetstreamClient,
     utils::{CLOCK, RelativeDateTime, get_time},
@@ -57,8 +57,9 @@ async fn main() {
 
     let cancel_token = CancellationToken::new();
 
-    let db =
-        Arc::new(Db::new(".fjall_data", cancel_token.child_token()).expect("couldnt create db"));
+    let db = Arc::new(
+        Db::new(DbConfig::default(), cancel_token.child_token()).expect("couldnt create db"),
+    );
 
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -156,7 +157,7 @@ async fn main() {
                                 },
                                 "running compaction...",
                             );
-                            match db.compact_all(db.max_block_size, range, false) {
+                            match db.compact_all(db.cfg.max_block_size, range, false) {
                                 Ok(_) => (),
                                 Err(e) => tracing::error!("failed to compact db: {}", e),
                             }
@@ -202,7 +203,7 @@ async fn main() {
 }
 
 fn debug() {
-    let db = Db::new(".fjall_data", CancellationToken::new()).expect("couldnt create db");
+    let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
     let info = db.info().expect("cant get db info");
     println!("disk size: {}", info.disk_size);
     for (nsid, blocks) in info.nsids {
@@ -226,7 +227,7 @@ fn debug() {
 }
 
 fn compact() {
-    let db = Db::new(".fjall_data", CancellationToken::new()).expect("couldnt create db");
+    let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
     let info = db.info().expect("cant get db info");
     db.major_compact().expect("cant compact");
     std::thread::sleep(Duration::from_secs(5));
@@ -247,10 +248,23 @@ fn compact() {
 fn migrate() {
     let cancel_token = CancellationToken::new();
     let from = Arc::new(
-        Db::new(".fjall_data_from", cancel_token.child_token()).expect("couldnt create db"),
+        Db::new(
+            DbConfig::default().path(".fjall_data_from"),
+            cancel_token.child_token(),
+        )
+        .expect("couldnt create db"),
     );
-    let to =
-        Arc::new(Db::new(".fjall_data_to", cancel_token.child_token()).expect("couldnt create db"));
+    let to = Arc::new(
+        Db::new(
+            DbConfig::default().path(".fjall_data_to").ks(|c| {
+                c.max_journaling_size(1024 * 1024 * 1024 * 8)
+                    .max_write_buffer_size(u64::MAX)
+                    .manual_journal_persist(true)
+            }),
+            cancel_token.child_token(),
+        )
+        .expect("couldnt create db"),
+    );
 
     let nsids = from.get_nsids().collect::<Vec<_>>();
     let eps_thread = std::thread::spawn({
@@ -296,6 +310,10 @@ fn migrate() {
     drop(from);
     tracing::info!("starting sync!!!");
     to.sync(true).expect("cant sync");
+    tracing::info!("persisting...");
+    to.ks
+        .persist(fjall::PersistMode::SyncAll)
+        .expect("cant persist");
     let total_time = start.elapsed();
     let write_per_second = total_count as f64 / (total_time - read_time).as_secs_f64();
     tracing::info!(

@@ -3,7 +3,7 @@ use std::{
     fmt::Debug,
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -75,26 +75,55 @@ pub struct DbInfo {
     pub disk_size: u64,
 }
 
+pub struct DbConfig {
+    pub ks_config: fjall::Config,
+    pub min_block_size: usize,
+    pub max_block_size: usize,
+    pub max_last_activity: u64,
+}
+
+impl DbConfig {
+    pub fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.ks_config = fjall::Config::new(path);
+        self
+    }
+
+    pub fn ks(mut self, f: impl FnOnce(fjall::Config) -> fjall::Config) -> Self {
+        self.ks_config = f(self.ks_config);
+        self
+    }
+}
+
+impl Default for DbConfig {
+    fn default() -> Self {
+        Self {
+            ks_config: fjall::Config::default(),
+            min_block_size: 512,
+            max_block_size: 500_000,
+            max_last_activity: Duration::from_secs(10).as_nanos() as u64,
+        }
+    }
+}
+
 // counts is nsid -> NsidCounts
 // hits is tree per nsid: varint start time + varint end time -> block of hits
 pub struct Db {
-    ks: Keyspace,
+    pub cfg: DbConfig,
+    pub ks: Keyspace,
     counts: Partition,
     hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
     sync_pool: threadpool::ThreadPool,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: RateTracker<100>,
     cancel_token: CancellationToken,
-    pub min_block_size: usize,
-    pub max_block_size: usize,
-    pub max_last_activity: u64,
 }
 
 impl Db {
-    pub fn new(path: impl AsRef<Path>, cancel_token: CancellationToken) -> AppResult<Self> {
+    pub fn new(cfg: DbConfig, cancel_token: CancellationToken) -> AppResult<Self> {
         tracing::info!("opening db...");
-        let ks = Config::new(path).open()?;
+        let ks = cfg.ks_config.clone().open()?;
         Ok(Self {
+            cfg,
             hits: Default::default(),
             sync_pool: threadpool::Builder::new()
                 .num_threads(rayon::current_num_threads() * 2)
@@ -107,9 +136,6 @@ impl Db {
             event_broadcaster: broadcast::channel(1000).0,
             eps: RateTracker::new(Duration::from_secs(1)),
             cancel_token,
-            min_block_size: 512,
-            max_block_size: 500_000,
-            max_last_activity: Duration::from_secs(10).as_nanos() as u64,
         })
     }
 
@@ -140,15 +166,16 @@ impl Db {
         for (_, handle) in self.hits.iter(&_guard) {
             let mut nsid_data = Vec::with_capacity(2);
             let mut total_count = 0;
-            let is_too_old = handle.since_last_activity() > self.max_last_activity;
+            let is_too_old = handle.since_last_activity() > self.cfg.max_last_activity;
             // if we disconnect for a long time, we want to sync all of what we
             // have to avoid having many small blocks (even if we run compaction
             // later, it reduces work until we run compaction)
             let block_size = (is_too_old || all)
-                .then_some(self.max_block_size)
+                .then_some(self.cfg.max_block_size)
                 .unwrap_or_else(|| {
-                    self.max_block_size
-                        .min(self.min_block_size.max(handle.suggested_block_size()))
+                    self.cfg
+                        .max_block_size
+                        .min(self.cfg.min_block_size.max(handle.suggested_block_size()))
                 });
             let count = handle.item_count();
             let data_count = count / block_size;
@@ -237,7 +264,7 @@ impl Db {
     }
 
     pub fn major_compact(&self) -> AppResult<()> {
-        self.compact_all(self.max_block_size, .., true)?;
+        self.compact_all(self.cfg.max_block_size, .., true)?;
         let _guard = scc::ebr::Guard::new();
         for (_, handle) in self.hits.iter(&_guard) {
             handle.deref().major_compact()?;
