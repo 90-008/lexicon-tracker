@@ -3,14 +3,14 @@ use std::{
     fmt::Debug,
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
 use byteview::StrView;
-use fjall::{Keyspace, Partition, PartitionCreateOptions};
+use fjall::{Config, Keyspace, Partition, PartitionCreateOptions};
 use itertools::{Either, Itertools};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rclite::Arc;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use smol_str::{SmolStr, ToSmolStr};
@@ -18,7 +18,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    db::handle::{Compression, LexiconHandle},
+    db::handle::{ItemDecoder, LexiconHandle},
     error::{AppError, AppResult},
     jetstream::JetstreamEvent,
     utils::{RateTracker, ReadVariableExt, varints_unsigned_encoded},
@@ -77,8 +77,6 @@ pub struct DbInfo {
 
 pub struct DbConfig {
     pub ks_config: fjall::Config,
-    #[cfg(feature = "compress")]
-    pub dict_path: std::path::PathBuf,
     pub min_block_size: usize,
     pub max_block_size: usize,
     pub max_last_activity: u64,
@@ -100,8 +98,6 @@ impl Default for DbConfig {
     fn default() -> Self {
         Self {
             ks_config: fjall::Config::default(),
-            #[cfg(feature = "compress")]
-            dict_path: "zstd_dict".parse().unwrap(),
             min_block_size: 512,
             max_block_size: 500_000,
             max_last_activity: Duration::from_secs(10).as_nanos() as u64,
@@ -120,30 +116,12 @@ pub struct Db {
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: RateTracker<100>,
     cancel_token: CancellationToken,
-    compression: Compression,
 }
 
 impl Db {
     pub fn new(cfg: DbConfig, cancel_token: CancellationToken) -> AppResult<Self> {
         tracing::info!("opening db...");
         let ks = cfg.ks_config.clone().open()?;
-        let _compression = Compression::None;
-        #[cfg(feature = "compress")]
-        let dict = std::fs::File::open(&cfg.dict_path).ok().and_then(|mut f| {
-            let meta = f.metadata().ok()?;
-            byteview::ByteView::from_reader(&mut f, meta.len() as usize).ok()
-        });
-        #[cfg(feature = "compress")]
-        let _compression = match dict {
-            Some(dict) => {
-                tracing::info!(
-                    "using zstd compression with dict from {}",
-                    cfg.dict_path.to_string_lossy()
-                );
-                Compression::Zstd(dict)
-            }
-            None => Compression::None,
-        };
         Ok(Self {
             cfg,
             hits: Default::default(),
@@ -158,7 +136,6 @@ impl Db {
             event_broadcaster: broadcast::channel(1000).0,
             eps: RateTracker::new(Duration::from_secs(1)),
             cancel_token,
-            compression: _compression,
         })
     }
 
@@ -236,7 +213,7 @@ impl Db {
                     .into_par_iter()
                     .map(|(i, items, handle)| {
                         let count = items.len();
-                        let block = handle.encode_block_from_items(items, count)?;
+                        let block = LexiconHandle::encode_block_from_items(items, count)?;
                         tracing::info!(
                             "{}: encoded block with {} items",
                             handle.nsid(),
@@ -305,11 +282,7 @@ impl Db {
             Some(handle) => handle.clone(),
             None => {
                 if self.ks.partition_exists(nsid.as_ref()) {
-                    let handle = Arc::new(LexiconHandle::new(
-                        &self.ks,
-                        nsid.as_ref(),
-                        self.compression.clone(),
-                    ));
+                    let handle = Arc::new(LexiconHandle::new(&self.ks, nsid.as_ref()));
                     let _ = self.hits.insert(SmolStr::new(nsid), handle.clone());
                     handle
                 } else {
@@ -322,13 +295,9 @@ impl Db {
 
     #[inline(always)]
     fn ensure_handle(&self, nsid: &SmolStr) -> impl Deref<Target = Arc<LexiconHandle>> + use<'_> {
-        self.hits.entry(nsid.clone()).or_insert_with(|| {
-            Arc::new(LexiconHandle::new(
-                &self.ks,
-                &nsid,
-                self.compression.clone(),
-            ))
-        })
+        self.hits
+            .entry(nsid.clone())
+            .or_insert_with(|| Arc::new(LexiconHandle::new(&self.ks, &nsid)))
     }
 
     pub fn ingest_events(&self, events: impl Iterator<Item = EventRecord>) -> AppResult<()> {
@@ -397,7 +366,9 @@ impl Db {
             };
             let block_lens = handle.iter().rev().try_fold(Vec::new(), |mut acc, item| {
                 let (key, value) = item?;
-                let decoder = handle.get_decoder_for(key, value)?;
+                let mut timestamps = Cursor::new(key);
+                let start_timestamp = timestamps.read_varint()?;
+                let decoder = ItemDecoder::new(Cursor::new(value), start_timestamp)?;
                 acc.push(decoder.item_count());
                 AppResult::Ok(acc)
             })?;
@@ -409,8 +380,7 @@ impl Db {
         })
     }
 
-    // train zstd dict with 1000 blocks from every lexicon
-    #[cfg(feature = "compress")]
+    // train zstd dict with 100 blocks from every lexicon
     pub fn train_zstd_dict(&self) -> AppResult<Vec<u8>> {
         let samples = self
             .get_nsids()
@@ -418,9 +388,10 @@ impl Db {
             .map(|handle| {
                 handle
                     .iter()
-                    .map(move |res| {
+                    .rev()
+                    .map(|res| {
                         res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-                            .and_then(|(_, value)| Ok(Cursor::new(handle.get_raw_block(value)?)))
+                            .map(|(_, value)| Cursor::new(value))
                     })
                     .take(1000)
             })
@@ -449,9 +420,13 @@ impl Db {
             return Either::Right(std::iter::empty());
         };
 
-        let map_block = |(key, val)| {
-            let decoder = handle.get_decoder_for(key, val)?;
-            let items = decoder
+        let map_block = move |(key, val)| {
+            let mut key_reader = Cursor::new(key);
+            let start_timestamp = key_reader.read_varint::<u64>()?;
+            if start_timestamp < start_limit {
+                return Ok(None);
+            }
+            let items = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?
                 .take_while(move |item| {
                     item.as_ref().map_or(true, |item| {
                         item.timestamp <= end_limit && item.timestamp >= start_limit

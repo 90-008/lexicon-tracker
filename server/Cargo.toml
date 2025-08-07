@@ -3,10 +3,6 @@ name = "server"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-default = ["compress"]
-compress = ["dep:zstd"]
-
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
@@ -34,7 +30,7 @@ byteview = "0.6.1"
 rayon = "1.10.0"
 parking_lot = { version = "0.12", features = ["send_guard", "hardware-lock-elision"] }
 rclite = "0.2.7"
-zstd = { version = "0.13.3", optional = true, features = ["experimental"] }
+zstd = "0.13.3"
 
 [target.'cfg(target_env = "msvc")'.dependencies]
 snmalloc-rs = "0.3.8"
