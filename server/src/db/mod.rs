@@ -435,17 +435,15 @@ impl Db {
             ))
         };
 
-        Either::Left(
-            handle
-                .range(..end_key)
-                .rev()
-                .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
-                .collect_vec()
-                .into_iter()
-                .rev()
-                .flatten()
-                .flatten(),
-        )
+        let blocks = handle
+            .range(..end_key)
+            .rev()
+            .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
+            .collect_vec();
+
+        tracing::info!("got blocks with size {}", blocks.len());
+
+        Either::Left(blocks.into_iter().rev().flatten().flatten())
     }
 
     pub fn tracking_since(&self) -> AppResult<u64> {
