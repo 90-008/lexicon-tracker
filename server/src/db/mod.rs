@@ -404,7 +404,7 @@ impl Db {
         // let mut ts = CLOCK.now();
         let mut current_item_count = 0;
         let map_block = move |(key, val)| {
-            if current_item_count > max_items {
+            if current_item_count >= max_items {
                 return Ok(None);
             }
             let mut key_reader = Cursor::new(key);
@@ -441,7 +441,10 @@ impl Db {
             .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
             .collect_vec();
 
-        tracing::info!("got blocks with size {}", blocks.len());
+        tracing::info!(
+            "got blocks with size {}, item count {current_item_count}",
+            blocks.len()
+        );
 
         Either::Left(blocks.into_iter().rev().flatten().flatten())
     }
