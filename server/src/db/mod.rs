@@ -404,6 +404,9 @@ impl Db {
         // let mut ts = CLOCK.now();
         let mut current_item_count = 0;
         let map_block = move |(key, val)| {
+            if current_item_count > max_items {
+                return Ok(None);
+            }
             let mut key_reader = Cursor::new(key);
             let start_timestamp = key_reader.read_varint::<u64>()?;
             // let end_timestamp = key_reader.read_varint::<u64>()?;
@@ -415,9 +418,6 @@ impl Db {
             }
             let decoder = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?;
             current_item_count += decoder.item_count();
-            if current_item_count > max_items {
-                return Ok(None);
-            }
             // tracing::info!(
             //     "took {}ns to get block with size {}",
             //     ts.elapsed().as_nanos(),
