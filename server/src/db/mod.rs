@@ -440,6 +440,9 @@ impl Db {
                 .range(..end_key)
                 .rev()
                 .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
+                .collect_vec()
+                .into_iter()
+                .rev()
                 .flatten()
                 .flatten(),
         )
