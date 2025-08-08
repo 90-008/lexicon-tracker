@@ -435,15 +435,14 @@ impl Db {
             ))
         };
 
-        let blocks = handle
-            .range(..end_key)
-            .rev()
-            .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
-            .collect::<Vec<_>>();
-
-        tracing::info!("returning {} blocks", blocks.len());
-
-        Either::Left(blocks.into_iter().rev().flatten().flatten())
+        Either::Left(
+            handle
+                .range(..end_key)
+                .rev()
+                .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
+                .flatten()
+                .flatten(),
+        )
     }
 
     pub fn tracking_since(&self) -> AppResult<u64> {
