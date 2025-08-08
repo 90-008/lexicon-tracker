@@ -322,14 +322,9 @@ fn migrate() {
                 to.ingest_events(hits.map(|hit| {
                     count += 1;
                     let hit = hit.expect("cant decode hit");
-                    let mut timestamp = hit.timestamp;
-                    // check if timestamp is microseconds, convert to seconds if it is
-                    if timestamp > 10_000_000_000 {
-                        timestamp /= 1_000_000;
-                    }
                     EventRecord {
                         nsid: nsid.to_smolstr(),
-                        timestamp,
+                        timestamp: hit.timestamp,
                         deleted: hit.deser().unwrap().deleted,
                     }
                 }))
