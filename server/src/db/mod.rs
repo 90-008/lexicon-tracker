@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, HashSet},
     fmt::Debug,
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
@@ -8,6 +7,7 @@ use std::{
     u64,
 };
 
+use ahash::{AHashMap, AHashSet};
 use byteview::StrView;
 use fjall::{Keyspace, Partition, PartitionCreateOptions};
 use itertools::{Either, Itertools};
@@ -72,7 +72,7 @@ impl EventRecord {
 }
 
 pub struct DbInfo {
-    pub nsids: HashMap<SmolStr, Vec<usize>>,
+    pub nsids: AHashMap<SmolStr, Vec<usize>>,
     pub disk_size: u64,
 }
 
@@ -114,7 +114,7 @@ pub struct Db {
     pub cfg: DbConfig,
     pub ks: Keyspace,
     counts: Partition,
-    hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>>,
+    hits: scc::HashIndex<SmolStr, Arc<LexiconHandle>, ahash::RandomState>,
     sync_pool: threadpool::ThreadPool,
     event_broadcaster: broadcast::Sender<(SmolStr, NsidCounts)>,
     eps: RateTracker<100>, // 100 millis buckets
@@ -167,7 +167,7 @@ impl Db {
         // prepare all the data
         let nsids_len = self.hits.len();
         let mut data = Vec::with_capacity(nsids_len);
-        let mut nsids = HashSet::with_capacity(nsids_len);
+        let mut nsids = AHashSet::with_capacity(nsids_len);
         let _guard = scc::ebr::Guard::new();
         for (nsid, handle) in self.hits.iter(&_guard) {
             let mut nsid_data = Vec::with_capacity(2);
@@ -370,7 +370,7 @@ impl Db {
     }
 
     pub fn info(&self) -> AppResult<DbInfo> {
-        let mut nsids = HashMap::new();
+        let mut nsids = AHashMap::new();
         for nsid in self.get_nsids() {
             let Some(handle) = self.get_handle(&nsid) else {
                 continue;

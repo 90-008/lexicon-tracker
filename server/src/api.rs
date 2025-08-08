@@ -1,11 +1,11 @@
 use std::{
-    collections::HashMap,
     fmt::Display,
     net::SocketAddr,
     ops::{Bound, Deref, RangeBounds},
     time::Duration,
 };
 
+use ahash::AHashMap;
 use anyhow::anyhow;
 use axum::{
     Json, Router,
@@ -117,11 +117,11 @@ struct NsidCount {
 #[derive(Serialize)]
 struct Events {
     per_second: usize,
-    events: HashMap<SmolStr, NsidCount>,
+    events: AHashMap<SmolStr, NsidCount>,
 }
 
 async fn events(db: State<Arc<Db>>) -> AppResult<Json<Events>> {
-    let mut events = HashMap::new();
+    let mut events = AHashMap::new();
     for result in db.get_counts() {
         let (nsid, counts) = result?;
         events.insert(
@@ -200,7 +200,7 @@ async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {
         (async move {
             let mut listener = db.new_listener();
             let mut data = Events {
-                events: HashMap::<SmolStr, NsidCount>::with_capacity(10),
+                events: AHashMap::<SmolStr, NsidCount>::with_capacity(10),
                 per_second: 0,
             };
             let mut updates = 0;
