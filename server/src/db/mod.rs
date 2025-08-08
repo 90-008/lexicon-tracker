@@ -383,6 +383,7 @@ impl Db {
         &self,
         nsid: &str,
         range: impl RangeBounds<u64> + std::fmt::Debug,
+        max_items: usize,
     ) -> impl Iterator<Item = AppResult<handle::Item>> {
         let start_limit = match range.start_bound().cloned() {
             Bound::Included(start) => start,
@@ -401,19 +402,22 @@ impl Db {
         };
 
         // let mut ts = CLOCK.now();
+        let mut current_item_count = 0;
         let map_block = move |(key, val)| {
             let mut key_reader = Cursor::new(key);
             let start_timestamp = key_reader.read_varint::<u64>()?;
             // let end_timestamp = key_reader.read_varint::<u64>()?;
             if start_timestamp < start_limit {
                 // tracing::info!(
-                //     "skipped block with timestamps {start_timestamp}..{end_timestamp} because {start_limit} is greater"
+                //     "stopped at block with timestamps {start_timestamp}..{end_timestamp} because {start_limit} is greater"
                 // );
                 return Ok(None);
-            } else {
-                // tracing::info!("using block with timestamp {start_timestamp}..{end_timestamp}");
             }
             let decoder = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?;
+            current_item_count += decoder.item_count();
+            if current_item_count > max_items {
+                return Ok(None);
+            }
             // tracing::info!(
             //     "took {}ns to get block with size {}",
             //     ts.elapsed().as_nanos(),

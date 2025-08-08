@@ -177,7 +177,7 @@ async fn hits(
     let from = params.to.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = params.from.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let maybe_hits = db
-        .get_hits(&params.nsid, HitsRange { from, to })
+        .get_hits(&params.nsid, HitsRange { from, to }, MAX_HITS)
         .take(MAX_HITS);
     let mut hits = Vec::with_capacity(maybe_hits.size_hint().0);
 

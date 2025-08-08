@@ -1,4 +1,4 @@
-use std::{ops::Deref, time::Duration, u64};
+use std::{ops::Deref, time::Duration, u64, usize};
 
 use itertools::Itertools;
 use rclite::Arc;
@@ -300,7 +300,11 @@ fn migrate() {
         threads.push(std::thread::spawn(move || {
             tracing::info!("{}: migrating...", nsid.deref());
             let mut count = 0_u64;
-            for hits in from.get_hits(&nsid, ..).chunks(100000).into_iter() {
+            for hits in from
+                .get_hits(&nsid, .., usize::MAX)
+                .chunks(100000)
+                .into_iter()
+            {
                 to.ingest_events(hits.map(|hit| {
                     count += 1;
                     let hit = hit.expect("cant decode hit");
