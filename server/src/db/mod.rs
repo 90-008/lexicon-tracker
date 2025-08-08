@@ -384,7 +384,6 @@ impl Db {
         nsid: &str,
         range: impl RangeBounds<u64> + std::fmt::Debug,
     ) -> impl Iterator<Item = AppResult<handle::Item>> {
-        let started_at = CLOCK.now();
         let start_limit = match range.start_bound().cloned() {
             Bound::Included(start) => start,
             Bound::Excluded(start) => start.saturating_add(1),
@@ -400,14 +399,19 @@ impl Db {
         let Some(handle) = self.get_handle(nsid) else {
             return Either::Right(std::iter::empty());
         };
-        tracing::info!("took {}ns to get handle", started_at.elapsed().as_nanos());
 
         let mut ts = CLOCK.now();
         let map_block = move |(key, val)| {
             let mut key_reader = Cursor::new(key);
             let start_timestamp = key_reader.read_varint::<u64>()?;
+            let end_timestamp = key_reader.read_varint::<u64>()?;
             if start_timestamp < start_limit {
+                tracing::info!(
+                    "skipped block with timestamps {start_timestamp}..{end_timestamp} because {start_limit} is greater"
+                );
                 return Ok(None);
+            } else {
+                tracing::info!("using block with timestamp {start_timestamp}..{end_timestamp}");
             }
             let decoder = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?;
             tracing::info!(
