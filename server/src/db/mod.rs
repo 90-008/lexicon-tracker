@@ -400,26 +400,26 @@ impl Db {
             return Either::Right(std::iter::empty());
         };
 
-        let mut ts = CLOCK.now();
+        // let mut ts = CLOCK.now();
         let map_block = move |(key, val)| {
             let mut key_reader = Cursor::new(key);
             let start_timestamp = key_reader.read_varint::<u64>()?;
-            let end_timestamp = key_reader.read_varint::<u64>()?;
+            // let end_timestamp = key_reader.read_varint::<u64>()?;
             if start_timestamp < start_limit {
-                tracing::info!(
-                    "skipped block with timestamps {start_timestamp}..{end_timestamp} because {start_limit} is greater"
-                );
+                // tracing::info!(
+                //     "skipped block with timestamps {start_timestamp}..{end_timestamp} because {start_limit} is greater"
+                // );
                 return Ok(None);
             } else {
-                tracing::info!("using block with timestamp {start_timestamp}..{end_timestamp}");
+                // tracing::info!("using block with timestamp {start_timestamp}..{end_timestamp}");
             }
             let decoder = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?;
-            tracing::info!(
-                "took {}ns to get block with size {}",
-                ts.elapsed().as_nanos(),
-                decoder.item_count()
-            );
-            ts = CLOCK.now();
+            // tracing::info!(
+            //     "took {}ns to get block with size {}",
+            //     ts.elapsed().as_nanos(),
+            //     decoder.item_count()
+            // );
+            // ts = CLOCK.now();
             Ok(Some(
                 decoder
                     .take_while(move |item| {
@@ -431,17 +431,15 @@ impl Db {
             ))
         };
 
-        Either::Left(
-            handle
-                .range(..end_key)
-                .rev()
-                .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .flatten()
-                .flatten(),
-        )
+        let blocks = handle
+            .range(..end_key)
+            .rev()
+            .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
+            .collect::<Vec<_>>();
+
+        tracing::info!("returning {} blocks", blocks.len());
+
+        Either::Left(blocks.into_iter().rev().flatten().flatten())
     }
 
     pub fn tracking_since(&self) -> AppResult<u64> {
