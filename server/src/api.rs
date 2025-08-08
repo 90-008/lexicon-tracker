@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fmt::Display,
     net::SocketAddr,
     ops::{Bound, Deref, RangeBounds},
@@ -176,22 +177,20 @@ async fn hits(
 ) -> AppResult<Json<Vec<Hit>>> {
     let from = params.to.map(Bound::Included).unwrap_or(Bound::Unbounded);
     let to = params.from.map(Bound::Included).unwrap_or(Bound::Unbounded);
-    let maybe_hits = db
-        .get_hits(&params.nsid, HitsRange { from, to }, MAX_HITS)
-        .take(MAX_HITS);
-    let mut hits = Vec::with_capacity(maybe_hits.size_hint().0);
 
-    for maybe_hit in maybe_hits {
-        let hit = maybe_hit?;
-        let hit_data = hit.deser()?;
+    db.get_hits(&params.nsid, HitsRange { from, to }, MAX_HITS)
+        .take(MAX_HITS)
+        .try_fold(Vec::with_capacity(MAX_HITS), |mut acc, hit| {
+            let hit = hit?;
+            let hit_data = hit.deser()?;
 
-        hits.push(Hit {
-            timestamp: hit.timestamp,
-            deleted: hit_data.deleted,
-        });
-    }
-
-    Ok(Json(hits))
+            acc.push(Hit {
+                timestamp: hit.timestamp,
+                deleted: hit_data.deleted,
+            });
+            Ok(acc)
+        })
+        .map(Json)
 }
 
 async fn stream_events(db: State<Arc<Db>>, ws: WebSocketUpgrade) -> Response {
