@@ -1,9 +1,12 @@
 use std::io::{self, Read, Write};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use arc_swap::RefCnt;
 use byteview::ByteView;
 use ordered_varint::Variable;
+use rclite::Arc;
 
 pub fn get_time() -> Duration {
     std::time::SystemTime::now()
@@ -318,5 +321,68 @@ impl std::fmt::Display for RelativeDateTime {
             TimeDirection::Forwards => write!(f, "in {} {}{}", amount, unit, plural),
             TimeDirection::Backwards => write!(f, "{} {}{} ago", amount, unit, plural),
         }
+    }
+}
+
+pub type ArcliteSwap<T> = arc_swap::ArcSwapAny<ArcRefCnt<T>>;
+
+pub struct ArcRefCnt<T>(Arc<T>);
+
+impl<T> ArcRefCnt<T> {
+    pub fn new(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl<T> Deref for ArcRefCnt<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> Clone for ArcRefCnt<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+// SAFETY: uhhhhhhhh copied the Arc impl from arc_swap xd
+unsafe impl<T> RefCnt for ArcRefCnt<T> {
+    type Base = T;
+
+    fn into_ptr(me: Self) -> *mut Self::Base {
+        Arc::into_raw(me.0) as *mut T
+    }
+
+    fn as_ptr(me: &Self) -> *mut Self::Base {
+        // Slightly convoluted way to do this, but this avoids stacked borrows violations. The same
+        // intention as
+        //
+        // me as &T as *const T as *mut T
+        //
+        // We first create a "shallow copy" of me - one that doesn't really own its ref count
+        // (that's OK, me _does_ own it, so it can't be destroyed in the meantime).
+        // Then we can use into_raw (which preserves not having the ref count).
+        //
+        // We need to "revert" the changes we did. In current std implementation, the combination
+        // of from_raw and forget is no-op. But formally, into_raw shall be paired with from_raw
+        // and that read shall be paired with forget to properly "close the brackets". In future
+        // versions of STD, these may become something else that's not really no-op (unlikely, but
+        // possible), so we future-proof it a bit.
+
+        // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
+        let ptr = Arc::into_raw(unsafe { std::ptr::read(&me.0) });
+        let ptr = ptr as *mut T;
+
+        // SAFETY: We got the pointer from into_raw just above
+        std::mem::forget(unsafe { Arc::from_raw(ptr) });
+
+        ptr
+    }
+
+    unsafe fn from_ptr(ptr: *const Self::Base) -> Self {
+        Self(unsafe { Arc::from_raw(ptr) })
     }
 }

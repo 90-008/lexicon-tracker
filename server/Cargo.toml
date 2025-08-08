@@ -31,3 +31,4 @@ rayon = "1.10.0"
 parking_lot = { version = "0.12", features = ["send_guard", "hardware-lock-elision"] }
 rclite = "0.2.7"
 snmalloc-rs = "0.3.8"
+arc-swap = "1.7.1"

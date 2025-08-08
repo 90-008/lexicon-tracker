@@ -1,13 +1,13 @@
 use std::{
     fmt::Debug,
     io::Cursor,
-    ops::{Bound, Deref, RangeBounds},
+    ops::{Bound, RangeBounds},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
     time::Duration,
 };
 
 use byteview::ByteView;
-use fjall::{Keyspace, Partition, PartitionCreateOptions, Slice};
+use fjall::{Keyspace, Partition, PartitionCreateOptions, Slice, Snapshot};
 use itertools::Itertools;
 use parking_lot::Mutex;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -16,8 +16,11 @@ use smol_str::SmolStr;
 
 use crate::{
     db::{EventRecord, NsidHit, block},
-    error::AppResult,
-    utils::{CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt, varints_unsigned_encoded},
+    error::{AppError, AppResult},
+    utils::{
+        ArcRefCnt, ArcliteSwap, CLOCK, DefaultRateTracker, RateTracker, ReadVariableExt,
+        varints_unsigned_encoded,
+    },
 };
 
 pub type ItemDecoder = block::ItemDecoder<Cursor<Slice>, NsidHit>;
@@ -31,7 +34,8 @@ pub struct Block {
 }
 
 pub struct LexiconHandle {
-    tree: Partition,
+    write_tree: Partition,
+    read_tree: ArcliteSwap<Snapshot>,
     nsid: SmolStr,
     buf: Arc<Mutex<Vec<EventRecord>>>,
     last_insert: AtomicU64, // relaxed
@@ -46,21 +50,16 @@ impl Debug for LexiconHandle {
     }
 }
 
-impl Deref for LexiconHandle {
-    type Target = Partition;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tree
-    }
-}
-
 impl LexiconHandle {
     pub fn new(keyspace: &Keyspace, nsid: &str) -> Self {
         let opts = PartitionCreateOptions::default()
             .block_size(1024 * 48)
             .compression(fjall::CompressionType::Miniz(9));
+        let write_tree = keyspace.open_partition(nsid, opts).unwrap();
+        let read_tree = ArcliteSwap::new(ArcRefCnt::new(write_tree.snapshot()));
         Self {
-            tree: keyspace.open_partition(nsid, opts).unwrap(),
+            write_tree,
+            read_tree,
             nsid: nsid.into(),
             buf: Default::default(),
             last_insert: AtomicU64::new(0),
@@ -68,14 +67,28 @@ impl LexiconHandle {
         }
     }
 
+    #[inline(always)]
+    pub fn read(&self) -> arc_swap::Guard<ArcRefCnt<Snapshot>> {
+        self.read_tree.load()
+    }
+
+    #[inline(always)]
+    pub fn update_tree(&self) {
+        self.read_tree
+            .store(ArcRefCnt::new(self.write_tree.snapshot()));
+    }
+
+    #[inline(always)]
     pub fn span(&self) -> tracing::Span {
         tracing::info_span!("handle", nsid = %self.nsid)
     }
 
+    #[inline(always)]
     pub fn nsid(&self) -> &SmolStr {
         &self.nsid
     }
 
+    #[inline(always)]
     pub fn item_count(&self) -> usize {
         self.buf.lock().len()
     }
@@ -122,7 +135,7 @@ impl LexiconHandle {
         let end_key = varints_unsigned_encoded([end_limit]);
 
         let blocks_to_compact = self
-            .tree
+            .read()
             .range(start_key..end_key)
             .collect::<Result<Vec<_>, _>>()?;
         if blocks_to_compact.len() < 2 {
@@ -162,10 +175,10 @@ impl LexiconHandle {
         let end_blocks_size = new_blocks.len();
 
         for key in keys_to_delete {
-            self.tree.remove(key.clone())?;
+            self.write_tree.remove(key.clone())?;
         }
         for block in new_blocks {
-            self.tree.insert(block.key, block.data)?;
+            self.write_tree.insert(block.key, block.data)?;
         }
 
         let reduction =
@@ -179,6 +192,12 @@ impl LexiconHandle {
         );
 
         Ok(())
+    }
+
+    pub fn insert_block(&self, block: Block) -> AppResult<()> {
+        self.write_tree
+            .insert(block.key, block.data)
+            .map_err(AppError::from)
     }
 
     pub fn encode_block_from_items(

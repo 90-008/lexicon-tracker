@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     io::Cursor,
     ops::{Bound, Deref, RangeBounds},
@@ -165,9 +165,11 @@ impl Db {
     pub fn sync(&self, all: bool) -> AppResult<()> {
         let start = CLOCK.now();
         // prepare all the data
-        let mut data = Vec::with_capacity(self.hits.len());
+        let nsids_len = self.hits.len();
+        let mut data = Vec::with_capacity(nsids_len);
+        let mut nsids = HashSet::with_capacity(nsids_len);
         let _guard = scc::ebr::Guard::new();
-        for (_, handle) in self.hits.iter(&_guard) {
+        for (nsid, handle) in self.hits.iter(&_guard) {
             let mut nsid_data = Vec::with_capacity(2);
             let mut total_count = 0;
             let is_too_old = handle.since_last_activity() > self.cfg.max_last_activity;
@@ -201,6 +203,7 @@ impl Db {
                     {blocks = %nsid_data.len(), count = %total_count},
                     "will encode & sync",
                 );
+                nsids.insert(nsid.clone());
                 data.push(nsid_data);
             }
         }
@@ -228,9 +231,10 @@ impl Db {
                 for (block, handle) in chunk {
                     self.sync_pool.execute(move || {
                         let _span = handle.span().entered();
-                        match handle.insert(block.key, block.data) {
+                        let written = block.written;
+                        match handle.insert_block(block) {
                             Ok(_) => {
-                                tracing::info!({count = %block.written}, "synced")
+                                tracing::info!({count = %written}, "synced")
                             }
                             Err(err) => tracing::error!({ err = %err }, "failed to sync block"),
                         }
@@ -239,6 +243,12 @@ impl Db {
                 AppResult::Ok(())
             })?;
         self.sync_pool.join();
+
+        // update snapshots for all (changed) handles
+        for nsid in nsids {
+            self.hits.peek_with(&nsid, |_, handle| handle.update_tree());
+        }
+
         tracing::info!(time = %start.elapsed().as_secs_f64(), "synced all blocks");
 
         Ok(())
@@ -254,7 +264,9 @@ impl Db {
         let Some(handle) = self.get_handle(nsid) else {
             return Ok(());
         };
-        handle.compact(max_count, range, sort)
+        handle.compact(max_count, range, sort)?;
+        handle.update_tree();
+        Ok(())
     }
 
     pub fn compact_all(
@@ -363,14 +375,18 @@ impl Db {
             let Some(handle) = self.get_handle(&nsid) else {
                 continue;
             };
-            let block_lens = handle.iter().rev().try_fold(Vec::new(), |mut acc, item| {
-                let (key, value) = item?;
-                let mut timestamps = Cursor::new(key);
-                let start_timestamp = timestamps.read_varint()?;
-                let decoder = ItemDecoder::new(Cursor::new(value), start_timestamp)?;
-                acc.push(decoder.item_count());
-                AppResult::Ok(acc)
-            })?;
+            let block_lens = handle
+                .read()
+                .iter()
+                .rev()
+                .try_fold(Vec::new(), |mut acc, item| {
+                    let (key, value) = item?;
+                    let mut timestamps = Cursor::new(key);
+                    let start_timestamp = timestamps.read_varint()?;
+                    let decoder = ItemDecoder::new(Cursor::new(value), start_timestamp)?;
+                    acc.push(decoder.item_count());
+                    AppResult::Ok(acc)
+                })?;
             nsids.insert(nsid.to_smolstr(), block_lens);
         }
         Ok(DbInfo {
@@ -438,7 +454,8 @@ impl Db {
             ))
         };
 
-        let (blocks, counted) = handle
+        let (blocks, _counted) = handle
+            .read()
             .range(..end_key)
             .map(|res| res.map_err(AppError::from))
             .rev()
@@ -462,10 +479,10 @@ impl Db {
             )
             .into_inner();
 
-        tracing::info!(
-            "got blocks with size {}, item count {counted}",
-            blocks.len()
-        );
+        // tracing::info!(
+        //     "got blocks with size {}, item count {counted}",
+        //     blocks.len()
+        // );
 
         Either::Left(blocks.into_iter().rev().flatten().flatten())
     }
@@ -476,7 +493,7 @@ impl Db {
         let Some(handle) = self.get_handle("app.bsky.feed.like") else {
             return Ok(0);
         };
-        let Some((timestamps_raw, _)) = handle.first_key_value()? else {
+        let Some((timestamps_raw, _)) = handle.read().first_key_value()? else {
             return Ok(0);
         };
         let mut timestamp_reader = Cursor::new(timestamps_raw);
