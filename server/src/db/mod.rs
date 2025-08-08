@@ -402,31 +402,35 @@ impl Db {
         };
         tracing::info!("took {}ns to get handle", started_at.elapsed().as_nanos());
 
+        let mut ts = CLOCK.now();
         let map_block = move |(key, val)| {
             let mut key_reader = Cursor::new(key);
             let start_timestamp = key_reader.read_varint::<u64>()?;
             if start_timestamp < start_limit {
                 return Ok(None);
             }
-            let items = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?
-                .take_while(move |item| {
-                    item.as_ref().map_or(true, |item| {
-                        item.timestamp <= end_limit && item.timestamp >= start_limit
+            let decoder = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?;
+            tracing::info!(
+                "took {}ns to get block with size {}",
+                ts.elapsed().as_nanos(),
+                decoder.item_count()
+            );
+            ts = CLOCK.now();
+            Ok(Some(
+                decoder
+                    .take_while(move |item| {
+                        item.as_ref().map_or(true, |item| {
+                            item.timestamp <= end_limit && item.timestamp >= start_limit
+                        })
                     })
-                })
-                .map(|res| res.map_err(AppError::from));
-            Ok(Some(items))
+                    .map(|res| res.map_err(AppError::from)),
+            ))
         };
 
-        let mut ts = CLOCK.now();
         Either::Left(
             handle
                 .range(..end_key)
                 .rev()
-                .inspect(|_| {
-                    tracing::info!("took {}ns to get block", ts.elapsed().as_nanos());
-                    ts = CLOCK.now();
-                })
                 .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
                 .collect::<Vec<_>>()
                 .into_iter()
