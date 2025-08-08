@@ -402,11 +402,11 @@ impl Db {
         };
 
         // let mut ts = CLOCK.now();
-        let mut current_item_count = 0;
-        let map_block = move |(key, val)| {
+        let map_block = move |(res, current_item_count)| -> AppResult<(Option<_>, usize)> {
             if current_item_count >= max_items {
-                return Ok(None);
+                return Ok((None, current_item_count));
             }
+            let (key, val) = res?;
             let mut key_reader = Cursor::new(key);
             let start_timestamp = key_reader.read_varint::<u64>()?;
             // let end_timestamp = key_reader.read_varint::<u64>()?;
@@ -414,35 +414,56 @@ impl Db {
                 // tracing::info!(
                 //     "stopped at block with timestamps {start_timestamp}..{end_timestamp} because {start_limit} is greater"
                 // );
-                return Ok(None);
+                return Ok((None, current_item_count));
             }
             let decoder = handle::ItemDecoder::new(Cursor::new(val), start_timestamp)?;
-            current_item_count += decoder.item_count();
+            let current_item_count = current_item_count + decoder.item_count();
             // tracing::info!(
             //     "took {}ns to get block with size {}",
             //     ts.elapsed().as_nanos(),
             //     decoder.item_count()
             // );
             // ts = CLOCK.now();
-            Ok(Some(
-                decoder
-                    .take_while(move |item| {
-                        item.as_ref().map_or(true, |item| {
-                            item.timestamp <= end_limit && item.timestamp >= start_limit
+            Ok((
+                Some(
+                    decoder
+                        .take_while(move |item| {
+                            item.as_ref().map_or(true, |item| {
+                                item.timestamp <= end_limit && item.timestamp >= start_limit
+                            })
                         })
-                    })
-                    .map(|res| res.map_err(AppError::from)),
+                        .map(|res| res.map_err(AppError::from)),
+                ),
+                current_item_count,
             ))
         };
 
-        let blocks = handle
+        let (blocks, counted) = handle
             .range(..end_key)
+            .map(|res| res.map_err(AppError::from))
             .rev()
-            .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
-            .collect_vec();
+            .fold_while(
+                (Vec::with_capacity(20), 0),
+                |(mut blocks, current_item_count), res| {
+                    use itertools::FoldWhile::*;
+
+                    match map_block((res, current_item_count)) {
+                        Ok((Some(block), current_item_count)) => {
+                            blocks.push(Ok(block));
+                            Continue((blocks, current_item_count))
+                        }
+                        Ok((None, current_item_count)) => Done((blocks, current_item_count)),
+                        Err(err) => {
+                            blocks.push(Err(err));
+                            Done((blocks, current_item_count))
+                        }
+                    }
+                },
+            )
+            .into_inner();
 
         tracing::info!(
-            "got blocks with size {}, item count {current_item_count}",
+            "got blocks with size {}, item count {counted}",
             blocks.len()
         );
 
