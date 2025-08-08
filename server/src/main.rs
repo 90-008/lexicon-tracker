@@ -53,6 +53,10 @@ async fn main() {
             debug();
             return;
         }
+        Some("print") => {
+            print_all();
+            return;
+        }
         Some(x) => {
             tracing::error!("unknown command: {}", x);
             return;
@@ -205,6 +209,21 @@ async fn main() {
     ingest_events.join().expect("failed to join ingest events");
     db_task.await.expect("cant join db task");
     db.sync(true).expect("cant sync db");
+}
+
+fn print_all() {
+    let db = Db::new(DbConfig::default(), CancellationToken::new()).expect("couldnt create db");
+    let nsids = db.get_nsids().collect::<Vec<_>>();
+    let mut count = 0_usize;
+    for nsid in nsids {
+        println!("{}:", nsid.deref());
+        for hit in db.get_hits(&nsid, .., usize::MAX) {
+            let hit = hit.expect("aaa");
+            println!("{} {}", hit.timestamp, hit.deser().unwrap().deleted);
+            count += 1;
+        }
+    }
+    println!("total hits: {}", count);
 }
 
 fn debug() {
