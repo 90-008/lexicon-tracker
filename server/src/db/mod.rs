@@ -384,6 +384,7 @@ impl Db {
         nsid: &str,
         range: impl RangeBounds<u64> + std::fmt::Debug,
     ) -> impl Iterator<Item = AppResult<handle::Item>> {
+        let started_at = CLOCK.now();
         let start_limit = match range.start_bound().cloned() {
             Bound::Included(start) => start,
             Bound::Excluded(start) => start.saturating_add(1),
@@ -399,6 +400,7 @@ impl Db {
         let Some(handle) = self.get_handle(nsid) else {
             return Either::Right(std::iter::empty());
         };
+        tracing::info!("took {}ns to get handle", started_at.elapsed().as_nanos());
 
         let map_block = move |(key, val)| {
             let mut key_reader = Cursor::new(key);
@@ -416,10 +418,15 @@ impl Db {
             Ok(Some(items))
         };
 
+        let mut ts = CLOCK.now();
         Either::Left(
             handle
                 .range(..end_key)
                 .rev()
+                .inspect(|_| {
+                    tracing::info!("took {}ns to get block", ts.elapsed().as_nanos());
+                    ts = CLOCK.now();
+                })
                 .map_while(move |res| res.map_err(AppError::from).and_then(map_block).transpose())
                 .collect::<Vec<_>>()
                 .into_iter()
