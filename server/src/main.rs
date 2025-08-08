@@ -156,7 +156,7 @@ async fn main() {
                             if db.is_shutting_down() {
                                 return;
                             }
-                            let end = get_time() - compact_period / 2;
+                            let end = get_time();
                             let start = end - compact_period;
                             let range = start.as_secs()..end.as_secs();
                             tracing::info!(
