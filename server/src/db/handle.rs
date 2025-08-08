@@ -144,7 +144,7 @@ impl LexiconHandle {
                 })?;
 
         if sort {
-            all_items.sort_unstable_by_key(|e| std::cmp::Reverse(e.timestamp));
+            all_items.sort_unstable_by_key(|e| e.timestamp);
         }
 
         let new_blocks = all_items
