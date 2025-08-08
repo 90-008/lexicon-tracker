@@ -30,9 +30,4 @@ byteview = "0.6.1"
 rayon = "1.10.0"
 parking_lot = { version = "0.12", features = ["send_guard", "hardware-lock-elision"] }
 rclite = "0.2.7"
-
-[target.'cfg(target_env = "msvc")'.dependencies]
 snmalloc-rs = "0.3.8"
-
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
