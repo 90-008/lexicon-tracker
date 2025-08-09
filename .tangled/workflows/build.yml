@@ -1,0 +1,25 @@
+when:
+  - event: ["push"]
+    branch: ["main"]
+
+dependencies:
+  nixpkgs:
+    - cargo
+    - bun
+    - curl
+    - gcc
+    - cmake
+    - gnumake
+
+steps:
+  - name: test server
+    command: |
+      cd server && cargo test
+  - name: build client
+    command: |
+      export PUBLIC_API_URL="localhost:3713"
+      bun --cwd=client install
+      bun --cwd=client run -b build
+  - name: trigger deploy
+    command: |
+      curl -u "$WEBHOOK_AUTH" https://webhook.gaze.systems/deploy-wolumonde
