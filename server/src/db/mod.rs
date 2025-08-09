@@ -312,9 +312,9 @@ impl Db {
     }
 
     pub fn ingest_events(&self, events: impl Iterator<Item = EventRecord>) -> AppResult<()> {
+        let mut seen_events = 0;
         for (key, chunk) in events.chunk_by(|event| event.nsid.clone()).into_iter() {
             let mut counts = self.get_count(&key)?;
-            let mut count = 0;
             self.ensure_handle(&key).queue(chunk.inspect(|e| {
                 // increment count
                 counts.last_seen = e.timestamp;
@@ -323,14 +323,14 @@ impl Db {
                 } else {
                     counts.count += 1;
                 }
-                count += 1;
+                seen_events += 1;
             }));
-            self.eps.observe(count);
             self.insert_count(&key, &counts)?;
             if self.event_broadcaster.receiver_count() > 0 {
                 let _ = self.event_broadcaster.send((key, counts));
             }
         }
+        self.eps.observe(seen_events);
         Ok(())
     }
 

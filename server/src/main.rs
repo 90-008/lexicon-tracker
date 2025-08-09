@@ -105,7 +105,7 @@ async fn main() {
         move || {
             let mut buffer = Vec::new();
             loop {
-                let read = event_rx.blocking_recv_many(&mut buffer, 100);
+                let read = event_rx.blocking_recv_many(&mut buffer, 500);
                 if let Err(err) = db.ingest_events(buffer.drain(..)) {
                     tracing::error!("failed to ingest events: {}", err);
                 }
