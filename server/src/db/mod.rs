@@ -171,7 +171,7 @@ impl Db {
         let _guard = scc::ebr::Guard::new();
         for (nsid, handle) in self.hits.iter(&_guard) {
             let mut nsid_data = Vec::with_capacity(2);
-            let mut total_count = 0;
+            // let mut total_count = 0;
             let is_too_old = handle.since_last_activity() > self.cfg.max_last_activity;
             // if we disconnect for a long time, we want to sync all of what we
             // have to avoid having many small blocks (even if we run compaction
@@ -188,21 +188,21 @@ impl Db {
             if count > 0 && (all || data_count > 0 || is_too_old) {
                 for _ in 0..data_count {
                     nsid_data.push((handle.clone(), block_size));
-                    total_count += block_size;
+                    // total_count += block_size;
                 }
                 // only sync remainder if we haven't met block size
                 let remainder = count % block_size;
                 if (all || data_count == 0) && remainder > 0 {
                     nsid_data.push((handle.clone(), remainder));
-                    total_count += remainder;
+                    // total_count += remainder;
                 }
             }
             let _span = handle.span().entered();
             if nsid_data.len() > 0 {
-                tracing::info!(
-                    {blocks = %nsid_data.len(), count = %total_count},
-                    "will encode & sync",
-                );
+                // tracing::info!(
+                //     {blocks = %nsid_data.len(), count = %total_count},
+                //     "will encode & sync",
+                // );
                 nsids.insert(nsid.clone());
                 data.push(nsid_data);
             }

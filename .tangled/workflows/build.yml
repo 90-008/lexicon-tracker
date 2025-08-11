@@ -8,8 +8,6 @@ dependencies:
     - bun
     - curl
     - gcc
-    - cmake
-    - gnumake
 
 steps:
   - name: test server
