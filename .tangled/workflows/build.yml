@@ -8,6 +8,7 @@ dependencies:
     - bun
     - curl
     - gcc
+    - gnused
 
 steps:
   - name: test server
