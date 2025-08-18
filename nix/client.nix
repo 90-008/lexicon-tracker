@@ -1,4 +1,5 @@
 {
+  lib,
   stdenv,
   makeBinaryWrapper,
   bun,
@@ -28,13 +29,20 @@ stdenv.mkDerivation {
   '';
   buildPhase = ''
     runHook preBuild
-    bun --prefer-offline run --bun build
+    bun --prefer-offline run build
     runHook postBuild
   '';
   installPhase = ''
     runHook preInstall
-    mkdir -p $out
+
+    mkdir -p $out/bin
     cp -R ./build/* $out
+    cp -R ./node_modules $out
+
+    makeBinaryWrapper ${bun}/bin/bun $out/bin/website \
+      --prefix PATH : ${lib.makeBinPath [ bun ]} \
+      --add-flags "run --bun --no-install --cwd $out start"
+
     runHook postInstall
   '';
 }
