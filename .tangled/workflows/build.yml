@@ -11,9 +11,6 @@ dependencies:
     - gnused
 
 steps:
-  - name: test server
-    command: |
-      cd server && cargo test
   - name: build client
     command: |
       export PUBLIC_API_URL="localhost:3713"

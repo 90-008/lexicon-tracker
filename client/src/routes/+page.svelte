@@ -1,6 +1,12 @@
 <script lang="ts">
     import { dev } from "$app/environment";
-    import type { EventRecord, NsidCount, SortOption } from "$lib/types";
+    import type {
+        EventRecord,
+        Events,
+        NsidCount,
+        Since,
+        SortOption,
+    } from "$lib/types";
     import { onMount, onDestroy } from "svelte";
     import { writable } from "svelte/store";
     import { PUBLIC_API_URL } from "$env/static/public";
@@ -15,7 +21,15 @@
     import RefreshControl from "$lib/components/RefreshControl.svelte";
     import { formatTimestamp } from "$lib/format";
 
-    const events = writable(new Map<string, EventRecord>());
+    type Props = {
+        data: { events: Events; trackingSince: Since };
+    };
+
+    const { data }: Props = $props();
+
+    const events = writable(
+        new Map<string, EventRecord>(Object.entries(data.events.events)),
+    );
     const pendingUpdates = new Map<string, EventRecord>();
     let eventsList: NsidCount[] = $state([]);
     let updateTimer: NodeJS.Timeout | null = null;
@@ -28,8 +42,17 @@
             }))
             .toArray();
     });
-    let per_second = $state(0);
-    let tracking_since = $state(0);
+    let per_second = $state(data.events.per_second);
+    let tracking_since = $state(data.trackingSince.since);
+
+    const applyEvents = (newEvents: Record<string, EventRecord>) => {
+        events.update((map) => {
+            for (const [nsid, event] of Object.entries(newEvents)) {
+                map.set(nsid, event);
+            }
+            return map;
+        });
+    };
 
     let all: EventRecord = $derived(
         eventsList.reduce(
@@ -76,26 +99,13 @@
         };
         websocket.onmessage = async (event) => {
             const jsonData = JSON.parse(event.data);
-
-            if (jsonData.per_second > 0) {
-                per_second = jsonData.per_second;
-            }
-
-            // Store updates in pending map if refresh rate is set
+            per_second = jsonData.per_second;
             if (refreshRate) {
                 for (const [nsid, event] of Object.entries(jsonData.events)) {
                     pendingUpdates.set(nsid, event as EventRecord);
                 }
             } else {
-                // Apply updates immediately if no refresh rate
-                events.update((map) => {
-                    for (const [nsid, event] of Object.entries(
-                        jsonData.events,
-                    )) {
-                        map.set(nsid, event as EventRecord);
-                    }
-                    return map;
-                });
+                applyEvents(jsonData.events);
             }
         };
         websocket.onerror = (error) => {
@@ -114,12 +124,7 @@
             error = null;
             const data = await fetchEvents();
             per_second = data.per_second;
-            events.update((map) => {
-                for (const [nsid, event] of Object.entries(data.events)) {
-                    map.set(nsid, event);
-                }
-                return map;
-            });
+            applyEvents(data.events);
             tracking_since = (await fetchTrackingSince()).since;
         } catch (err) {
             error =
