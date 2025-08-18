@@ -31,6 +31,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@number-flow/svelte": "^0.3.9"
+    "@number-flow/svelte": "^0.3.9",
+    "svelte-adapter-bun": "^0.5.2"
   }
 }
