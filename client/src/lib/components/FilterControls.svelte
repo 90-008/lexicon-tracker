@@ -20,10 +20,3 @@
         class="bg-blue-50 text-blue-900 placeholder-blue-400 border border-blue-200 rounded-full px-1 outline-none focus:bg-white focus:border-blue-400 min-w-0 w-24"
     />
 </div>
-
-<style lang="postcss">
-    @reference "../../app.css";
-    .wsbadge {
-        @apply text-sm font-semibold mt-1.5 px-2.5 py-0.5 rounded-full border;
-    }
-</style>

@@ -27,13 +27,13 @@
     const config = $derived(statusConfig[status]);
 </script>
 
-<span class="wsbadge {config.classes}">
-    {config.text}
-</span>
-
-<style lang="postcss">
-    @reference "../../app.css";
-    .wsbadge {
-        @apply text-sm font-semibold mt-1.5 px-2.5 py-0.5 rounded-full border;
-    }
-</style>
+<div class="flex flex-row items-center gap-2 wsbadge {config.classes}">
+    <!-- connecting spinner -->
+    {#if status === "connecting"}
+        <div
+            class="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-800"
+        ></div>
+    {/if}
+    <!-- status text -->
+    <span>{config.text}</span>
+</div>

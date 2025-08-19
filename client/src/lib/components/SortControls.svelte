@@ -32,10 +32,3 @@
         {/each}
     </select>
 </div>
-
-<style lang="postcss">
-    @reference "../../app.css";
-    .wsbadge {
-        @apply text-sm font-semibold mt-1.5 px-2.5 py-0.5 rounded-full border;
-    }
-</style>

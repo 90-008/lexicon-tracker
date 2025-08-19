@@ -28,3 +28,7 @@ body {
     overflow-y: overlay;
     overflow-y: auto; /* Fallback for browsers that don't support overlay */
 }
+
+.wsbadge {
+    @apply text-sm font-semibold mt-1.5 px-2.5 py-0.5 rounded-full border;
+}
