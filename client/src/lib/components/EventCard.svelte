@@ -104,19 +104,19 @@
 </script>
 
 <div
-    class="group flex flex-col gap-2 p-1.5 md:p-3 min-h-64 bg-white border border-gray-200 rounded-lg hover:shadow-lg md:hover:-translate-y-1 transition-all duration-200 transform"
+    class="group flex flex-col gap-2 p-1.5 md:p-3 min-h-64 bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-950 rounded-lg hover:shadow-lg md:hover:-translate-y-1 transition-all duration-200 transform"
     class:has-activity={isAnimating}
     style="--border-thickness: {borderThickness}px"
 >
     <div class="flex items-start gap-2">
         <div
-            class="text-sm font-bold text-blue-600 bg-blue-100 px-3 py-1 rounded-full"
+            class="text-sm font-bold text-blue-600 bg-blue-100 dark:bg-indigo-950 px-3 py-1 rounded-full"
         >
             #{index + 1}
         </div>
         <div
             title={event.nsid}
-            class="font-mono text-sm text-gray-700 mt-0.5 leading-relaxed rounded-full text-nowrap text-ellipsis overflow-hidden group-hover:overflow-visible group-hover:bg-gray-50 border-gray-100 group-hover:border transition-all px-1"
+            class="font-mono text-sm text-gray-700 dark:text-gray-300 mt-0.5 leading-relaxed rounded-full text-nowrap text-ellipsis overflow-hidden group-hover:overflow-visible group-hover:bg-gray-50 dark:group-hover:bg-gray-700 border-gray-100 dark:border-gray-900 group-hover:border transition-all px-1"
         >
             {event.nsid}
         </div>
@@ -136,20 +136,23 @@
     </div>
 </div>
 
-<style>
+<style lang="postcss">
     .has-activity {
         position: relative;
         transition: all 0.2s ease-out;
     }
 
     .has-activity::before {
+        @reference "../../app.css";
+        @apply border-blue-500 dark:border-blue-800;
         content: "";
         position: absolute;
         top: calc(-1 * var(--border-thickness));
         left: calc(-1 * var(--border-thickness));
         right: calc(-1 * var(--border-thickness));
         bottom: calc(-1 * var(--border-thickness));
-        border: var(--border-thickness) solid rgba(59, 130, 246, 0.8);
+        border-width: var(--border-thickness);
+        border-style: solid;
         border-radius: calc(0.5rem + var(--border-thickness));
         pointer-events: none;
         transition: all 0.3s ease-out;

@@ -8,9 +8,11 @@
 </script>
 
 <div
-    class="wsbadge !pl-2 !px-1 !mt-0 !font-normal bg-lime-100 hover:bg-lime-200 border-lime-300"
+    class="wsbadge !pl-2 !px-1 !mt-0 !font-normal bg-lime-100 dark:bg-lime-900 dark:hover:bg-lime-800 hover:bg-lime-200 border-lime-300 dark:border-lime-700"
 >
-    <label for="refresh-rate" class="text-lime-800 mr-1">refresh:</label>
+    <label for="refresh-rate" class="text-lime-800 dark:text-lime-200 mr-1"
+        >refresh:</label
+    >
     <input
         id="refresh-rate"
         value={refreshRate}
@@ -24,7 +26,7 @@
         pattern="[0-9]*"
         min="0"
         placeholder="real-time"
-        class="bg-green-50 text-lime-900 placeholder-lime-600 border border-lime-200 rounded-full px-1 outline-none focus:bg-white focus:border-lime-400 min-w-0 w-20"
+        class="bg-green-50 dark:bg-green-900 text-lime-900 dark:text-lime-200 placeholder-lime-600 dark:placeholder-lime-400 border border-lime-200 dark:border-lime-700 rounded-full px-1 outline-none focus:border-lime-400 min-w-0 w-20"
     />
-    <span class="text-lime-700">s</span>
+    <span class="text-lime-800 dark:text-lime-200">s</span>
 </div>

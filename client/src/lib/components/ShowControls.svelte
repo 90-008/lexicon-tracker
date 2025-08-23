@@ -12,15 +12,17 @@
 </script>
 
 <div
-    class="wsbadge !pl-2 !px-1 !mt-0 !font-normal bg-pink-100 hover:bg-pink-200 border-pink-300"
+    class="wsbadge !pl-2 !px-1 !mt-0 !font-normal bg-pink-100 dark:bg-pink-800 hover:bg-pink-200 dark:hover:bg-pink-700 border-pink-300 dark:border-pink-700"
 >
-    <label for="show" class="text-pink-800 mr-1"> show since: </label>
+    <label for="show" class="text-pink-800 dark:text-pink-100 mr-1">
+        show since:
+    </label>
     <select
         id="show"
         value={show}
         onchange={(e) =>
             onShowChange((e.target as HTMLSelectElement).value as ShowOption)}
-        class="bg-pink-50 text-pink-900 border border-pink-200 rounded-full px-1 outline-none focus:bg-white focus:border-pink-400 min-w-0"
+        class="bg-pink-50 dark:bg-pink-900 text-pink-900 dark:text-pink-100 border border-pink-200 dark:border-pink-700 rounded-full px-1 outline-none focus:border-pink-400 min-w-0"
     >
         {#each showOptions as option}
             <option value={option}>{option}</option>

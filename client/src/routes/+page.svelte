@@ -267,19 +267,23 @@
     />
 </svelte:head>
 
-<header class="border-gray-300 border-b mb-4 pb-2">
+<header
+    class="bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-950 border-b mb-4 pb-2"
+>
     <div
         class="px-2 md:ml-[19vw] mx-auto flex flex-wrap items-center text-center"
     >
-        <h1 class="text-4xl font-bold mr-4 text-gray-900">lexicon tracker</h1>
-        <p class="text-lg mt-1 text-gray-600">
+        <h1 class="text-4xl font-bold mr-4 text-gray-900 dark:text-gray-200">
+            lexicon tracker
+        </h1>
+        <p class="text-lg mt-1 text-gray-600 dark:text-gray-300">
             tracks lexicons seen on the jetstream {tracking_since === 0
                 ? ""
                 : `(since: ${formatTimestamp(tracking_since)})`}
         </p>
     </div>
 </header>
-<div class="md:max-w-[61vw] mx-auto p-2">
+<div class="bg-white dark:bg-gray-900 md:max-w-[61vw] mx-auto p-2">
     <div class="min-w-fit grid grid-cols-2 xl:grid-cols-4 gap-2 2xl:gap-6 mb-8">
         <StatsCard
             title="total creation"
@@ -305,7 +309,7 @@
 
     {#if error}
         <div
-            class="bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg mb-6"
+            class="bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 text-red-700 dark:text-red-200 px-4 py-3 rounded-lg mb-6"
         >
             <p>Error: {error}</p>
         </div>
@@ -314,7 +318,9 @@
     {#if eventsList.length > 0}
         <div class="mb-8">
             <div class="flex flex-wrap items-center gap-3 mb-3">
-                <h2 class="text-2xl font-bold text-gray-900">seen lexicons</h2>
+                <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-200">
+                    seen lexicons
+                </h2>
                 <StatusBadge status={websocketStatus} />
             </div>
             <div class="flex flex-wrap items-center gap-1.5 mb-6">
@@ -367,13 +373,13 @@
     {/if}
 </div>
 
-<footer class="py-2 border-t border-gray-200 text-center">
-    <p class="text-gray-600 text-sm">
+<footer class="py-2 border-t border-gray-200 dark:border-gray-800 text-center">
+    <p class="text-gray-600 dark:text-gray-200 text-sm">
         source code <a
             href="https://tangled.sh/@poor.dog/nsid-tracker"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-blue-600 hover:text-blue-800 underline"
+            class="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-600 underline"
             >@poor.dog/nsid-tracker</a
         >
     </p>

@@ -11,8 +11,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <button
     onclick={onBskyToggle}
-    class="wsbadge !mt-0 !font-normal bg-blue-100 hover:bg-blue-200 border-blue-300"
+    class="wsbadge !mt-0 !font-normal bg-blue-100 dark:bg-blue-900 hover:bg-blue-200 dark:hover:bg-blue-800 border-blue-300 dark:border-blue-700"
 >
     <input checked={dontShowBsky} type="checkbox" />
-    <span class="ml-0.5"> hide app.bsky.* </span>
+    <span class="ml-0.5 text-black dark:text-gray-200"> hide app.bsky.* </span>
 </button>

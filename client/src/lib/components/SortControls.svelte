@@ -17,15 +17,17 @@
 </script>
 
 <div
-    class="wsbadge !pl-2 !px-1 !mt-0 !font-normal bg-purple-100 hover:bg-purple-200 border-purple-300"
+    class="wsbadge !pl-2 !px-1 !mt-0 !font-normal bg-purple-100 dark:bg-purple-800 hover:bg-purple-200 dark:hover:bg-purple-700 border-purple-300 dark:border-purple-700"
 >
-    <label for="sort-by" class="text-purple-800 mr-1"> sort by: </label>
+    <label for="sort-by" class="text-purple-800 dark:text-purple-300 mr-1">
+        sort by:
+    </label>
     <select
         id="sort-by"
         value={sortBy}
         onchange={(e) =>
             onSortChange((e.target as HTMLSelectElement).value as SortOption)}
-        class="bg-purple-50 text-purple-900 border border-purple-200 rounded-full px-1 outline-none focus:bg-white focus:border-purple-400 min-w-0"
+        class="bg-purple-50 dark:bg-purple-900 text-purple-900 dark:text-purple-300 border border-purple-200 dark:border-purple-700 rounded-full px-1 outline-none focus:border-purple-400 min-w-0"
     >
         {#each sortOptions as option}
             <option value={option.value}>{option.label}</option>
