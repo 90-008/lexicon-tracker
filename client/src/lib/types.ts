@@ -18,3 +18,4 @@ export type Since = {
 };
 
 export type SortOption = "total" | "created" | "deleted" | "date";
+export type ShowOption = "server init" | "stream start";

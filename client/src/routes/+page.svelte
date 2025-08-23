@@ -4,11 +4,12 @@
         EventRecord,
         Events,
         NsidCount,
+        ShowOption,
         Since,
         SortOption,
     } from "$lib/types";
     import { onMount, onDestroy } from "svelte";
-    import { writable } from "svelte/store";
+    import { get, writable } from "svelte/store";
     import { PUBLIC_API_URL } from "$env/static/public";
     import { fetchEvents, fetchTrackingSince } from "$lib/api";
     import { createRegexFilter } from "$lib/filter";
@@ -20,6 +21,7 @@
     import BskyToggle from "$lib/components/BskyToggle.svelte";
     import RefreshControl from "$lib/components/RefreshControl.svelte";
     import { formatTimestamp } from "$lib/format";
+    import ShowControls from "$lib/components/ShowControls.svelte";
 
     type Props = {
         data: { events: Events; trackingSince: Since };
@@ -30,21 +32,40 @@
     const events = writable(
         new Map<string, EventRecord>(Object.entries(data.events.events)),
     );
+    const eventsStart = new Map<string, EventRecord>(
+        Object.entries(data.events.events),
+    );
     const pendingUpdates = new Map<string, EventRecord>();
-    let eventsList: NsidCount[] = $state([]);
+
     let updateTimer: NodeJS.Timeout | null = null;
-    events.subscribe((value) => {
-        eventsList = value
-            .entries()
-            .map(([nsid, event]) => ({
-                nsid,
-                ...event,
-            }))
-            .toArray();
-    });
     let per_second = $state(data.events.per_second);
     let tracking_since = $state(data.trackingSince.since);
 
+    const diffEvents = (
+        oldEvents: Map<string, EventRecord>,
+        newEvents: Map<string, EventRecord>,
+    ): NsidCount[] => {
+        const nsidCounts: NsidCount[] = [];
+        for (const [nsid, event] of newEvents.entries()) {
+            const oldEvent = oldEvents.get(nsid);
+            if (oldEvent) {
+                const counts = {
+                    nsid,
+                    count: event.count - oldEvent.count,
+                    deleted_count: event.deleted_count - oldEvent.deleted_count,
+                    last_seen: event.last_seen,
+                };
+                if (counts.count > 0 || counts.deleted_count > 0)
+                    nsidCounts.push(counts);
+            } else {
+                nsidCounts.push({
+                    nsid,
+                    ...event,
+                });
+            }
+        }
+        return nsidCounts;
+    };
     const applyEvents = (newEvents: Record<string, EventRecord>) => {
         events.update((map) => {
             for (const [nsid, event] of Object.entries(newEvents)) {
@@ -54,6 +75,31 @@
         });
     };
 
+    let error: string | null = $state(null);
+    let filterRegex = $state("");
+    let dontShowBsky = $state(false);
+    let sortBy: SortOption = $state("total");
+    let refreshRate = $state("");
+    let changedByUser = $state(false);
+    let show: ShowOption = $state("server init");
+    let eventsList: NsidCount[] = $state([]);
+    let updateEventsList = $derived((value: Map<string, EventRecord>) => {
+        switch (show) {
+            case "server init":
+                eventsList = value
+                    .entries()
+                    .map(([nsid, event]) => ({
+                        nsid,
+                        ...event,
+                    }))
+                    .toArray();
+                break;
+            case "stream start":
+                eventsList = diffEvents(eventsStart, value);
+                break;
+        }
+    });
+    events.subscribe((value) => updateEventsList(value));
     let all: EventRecord = $derived(
         eventsList.reduce(
             (acc, event) => {
@@ -73,12 +119,6 @@
             },
         ),
     );
-    let error: string | null = $state(null);
-    let filterRegex = $state("");
-    let dontShowBsky = $state(false);
-    let sortBy: SortOption = $state("total");
-    let refreshRate = $state("");
-    let changedByUser = $state(false);
 
     let websocket: WebSocket | null = null;
     let isStreamOpen = $state(false);
@@ -294,6 +334,13 @@
                             refreshRate = "2";
                         else if (refreshRate === "2" && changedByUser === false)
                             refreshRate = "";
+                    }}
+                />
+                <ShowControls
+                    {show}
+                    onShowChange={(value: ShowOption) => {
+                        show = value;
+                        updateEventsList(get(events));
                     }}
                 />
                 <RefreshControl
