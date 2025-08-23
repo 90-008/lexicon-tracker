@@ -70,14 +70,19 @@ async fn main() {
         .install_default()
         .expect("cant install rustls crypto provider");
 
-    let mut jetstream =
-        match JetstreamClient::new("wss://jetstream2.us-west.bsky.network/subscribe") {
-            Ok(client) => client,
-            Err(err) => {
-                tracing::error!("can't create jetstream client: {err}");
-                return;
-            }
-        };
+    let urls = [
+        "wss://jetstream2.fr.hose.cam/subscribe",
+        "wss://jetstream.fire.hose.cam/subscribe",
+        "wss://jetstream1.us-west.bsky.network/subscribe",
+        "wss://jetstream2.us-west.bsky.network/subscribe",
+    ];
+    let mut jetstream = match JetstreamClient::new(urls) {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::error!("can't create jetstream client: {err}");
+            return;
+        }
+    };
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1000);
     let consume_events = tokio::spawn({

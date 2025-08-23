@@ -13,27 +13,37 @@ use crate::error::AppResult;
 pub struct JetstreamClient {
     stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     tls_connector: tokio_websockets::Connector,
-    url: SmolStr,
+    urls: Vec<SmolStr>,
 }
 
 impl JetstreamClient {
-    pub fn new(url: &str) -> AppResult<Self> {
+    pub fn new(urls: impl IntoIterator<Item = impl Into<SmolStr>>) -> AppResult<Self> {
         Ok(Self {
             stream: None,
             tls_connector: tokio_websockets::Connector::new()?,
-            url: SmolStr::new(url),
+            urls: urls.into_iter().map(Into::into).collect(),
         })
     }
 
     pub async fn connect(&mut self) -> AppResult<()> {
-        let (stream, _) = ClientBuilder::new()
-            .connector(&self.tls_connector)
-            .uri(&self.url)?
-            .connect()
-            .await?;
-        self.stream = Some(stream);
-        tracing::info!("connected to jetstream ({})", self.url);
-        Ok(())
+        for uri in &self.urls {
+            let conn_result = ClientBuilder::new()
+                .connector(&self.tls_connector)
+                .uri(uri)?
+                .connect()
+                .await;
+            match conn_result {
+                Ok((stream, _)) => {
+                    self.stream = Some(stream);
+                    tracing::info!("connected to jetstream {}", uri);
+                    return Ok(());
+                }
+                Err(err) => {
+                    tracing::error!("failed to connect to jetstream {uri}: {err}");
+                }
+            };
+        }
+        Err(anyhow!("failed to connect to any jetstream server").into())
     }
 
     // automatically retries connection, only returning error if it fails many times
